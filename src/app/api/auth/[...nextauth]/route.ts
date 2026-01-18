@@ -44,15 +44,44 @@ export const authOptions: NextAuthOptions = {
   ],
 
   callbacks: {
-    async jwt({ token, user }) {
-      if (user) (token as any).id = (user as any).id;
-      return token;
-    },
-    async session({ session, token }) {
-      if (session.user) (session.user as any).id = (token as any).id;
-      return session;
-    },
+  async jwt({ token, user, account, profile }) {
+    // If credentials login, you already have user.id
+    if (user) (token as any).id = (user as any).id;
+
+    // If Google OAuth login, ensure a users row exists and attach its id
+    if (account?.provider === "google") {
+      const email = token.email;
+      if (email) {
+        const name = token.name ?? null;
+        const image = token.picture ?? null;
+
+        // Upsert user by email and fetch id
+        const res = await pool.query(
+          `
+          INSERT INTO users (email, name, image)
+          VALUES ($1, $2, $3)
+          ON CONFLICT (email)
+          DO UPDATE SET
+            name = COALESCE(EXCLUDED.name, users.name),
+            image = COALESCE(EXCLUDED.image, users.image)
+          RETURNING id;
+          `,
+          [email, name, image]
+        );
+
+        (token as any).id = res.rows[0].id;
+      }
+    }
+
+    return token;
   },
+
+  async session({ session, token }) {
+    if (session.user) (session.user as any).id = (token as any).id;
+    return session;
+  },
+},
+
 
   secret: process.env.NEXTAUTH_SECRET,
 };
