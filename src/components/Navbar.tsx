@@ -66,7 +66,7 @@ export default function Navbar() {
                     onClick={() => setIsDropdownOpen(false)}
                     className="block px-4 py-2 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition flex items-center gap-2"
                   >
-                    <span>📊</span> Your Profile
+                    Profile
                   </Link>
 
                   <div className="h-px bg-gray-800 my-1 mx-2" />
@@ -75,7 +75,7 @@ export default function Navbar() {
                     onClick={() => signOut({ callbackUrl: '/' })}
                     className="w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-red-900/10 transition flex items-center gap-2"
                   >
-                    <span>🚪</span> Sign Out
+                    Sign Out
                   </button>
                 </div>
               )}
