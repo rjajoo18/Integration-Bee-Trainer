@@ -36,6 +36,11 @@ export default function Navbar() {
           <Link href="/trainer" className="hidden md:block text-sm font-medium text-gray-400 hover:text-white transition">
             Trainer
           </Link>
+
+          <Link href="/battle" className="hidden md:block text-sm font-medium text-gray-400 hover:text-white transition">
+            Battle
+          </Link>
+
           
           {/* Auth State Logic */}
           {status === 'authenticated' ? (
