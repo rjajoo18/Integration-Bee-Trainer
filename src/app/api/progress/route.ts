@@ -1,81 +1,92 @@
 import { NextResponse } from "next/server";
-import { Pool } from "pg";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
-
-export const runtime = "nodejs";
-
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-});
+import { pool } from "@/lib/db";
 
 export async function GET() {
   const session = await getServerSession(authOptions);
-  if (!session?.user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const userId = (session.user as any).id;
+  if (!session?.user?.email) return NextResponse.json({});
 
   try {
+    // 1. Get User ID
+    const userRes = await pool.query("SELECT id FROM users WHERE email = $1", [
+      session.user.email,
+    ]);
+    
+    if (userRes.rows.length === 0) return NextResponse.json({});
+    const userId = userRes.rows[0].id;
+
+    // 2. Fetch Progress (FIXED: Changed table to 'user_progress')
     const result = await pool.query(
       "SELECT problem_id, is_solved, attempts FROM user_progress WHERE user_id = $1",
       [userId]
     );
 
     const progressMap: Record<string, { solved: boolean; attempts: number }> = {};
-    for (const row of result.rows) {
-      progressMap[String(row.problem_id)] = {
+    result.rows.forEach((row) => {
+      progressMap[row.problem_id] = {
         solved: row.is_solved,
         attempts: row.attempts,
       };
-    }
+    });
 
     return NextResponse.json(progressMap);
   } catch (error) {
-    console.error("DB Error (progress GET):", error);
-    return NextResponse.json({ error: "Query failed" }, { status: 500 });
+    console.error("Progress GET Error:", error);
+    return NextResponse.json({ error: "Failed to load progress" }, { status: 500 });
   }
 }
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
-  if (!session?.user) {
+  if (!session?.user?.email) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const userId = (session.user as any).id;
-
-  let body: any;
   try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
-  }
+    const { problemId, isCorrect } = await req.json();
+    console.log(`Saving progress for ${session.user.email}: Problem ${problemId}, Correct: ${isCorrect}`);
 
-  const { problemId, isCorrect } = body;
-  if (problemId == null || typeof isCorrect !== "boolean") {
-    return NextResponse.json(
-      { error: "Expected { problemId, isCorrect }" },
-      { status: 400 }
+    // 1. Get User ID
+    const userRes = await pool.query("SELECT id FROM users WHERE email = $1", [
+      session.user.email,
+    ]);
+    
+    if (userRes.rows.length === 0) {
+      return NextResponse.json({ error: "User not found" }, { status: 404 });
+    }
+    const userId = userRes.rows[0].id;
+
+    // 2. Upsert Progress (FIXED: Changed table to 'user_progress')
+    const existing = await pool.query(
+      "SELECT id, is_solved, attempts FROM user_progress WHERE user_id = $1 AND problem_id = $2",
+      [userId, problemId]
     );
-  }
 
-  const query = `
-    INSERT INTO user_progress (user_id, problem_id, is_solved, attempts, last_updated)
-    VALUES ($1, $2, $3, 1, NOW())
-    ON CONFLICT (user_id, problem_id)
-    DO UPDATE SET
-      is_solved = GREATEST(user_progress.is_solved, EXCLUDED.is_solved),
-      attempts = user_progress.attempts + 1,
-      last_updated = NOW();
-  `;
+    if (existing.rows.length > 0) {
+      // UPDATE
+      const row = existing.rows[0];
+      const newSolved = row.is_solved || isCorrect;
+      const newAttempts = row.attempts + 1;
 
-  try {
-    await pool.query(query, [userId, problemId, isCorrect]);
+      await pool.query(
+        `UPDATE user_progress 
+         SET is_solved = $1, attempts = $2, last_updated = NOW() 
+         WHERE id = $3`,
+        [newSolved, newAttempts, row.id]
+      );
+    } else {
+      // INSERT
+      await pool.query(
+        `INSERT INTO user_progress (user_id, problem_id, is_solved, attempts, last_updated)
+         VALUES ($1, $2, $3, 1, NOW())`,
+        [userId, problemId, isCorrect]
+      );
+    }
+
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error("DB Error (progress POST):", error);
-    return NextResponse.json({ error: "Update failed" }, { status: 500 });
+    console.error("Progress POST Error:", error);
+    return NextResponse.json({ error: "Failed to save" }, { status: 500 });
   }
 }

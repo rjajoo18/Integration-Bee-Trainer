@@ -8,12 +8,11 @@ export const runtime = "nodejs";
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
 });
-
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
-  if (!session) {
+  /*if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  }*/
 
   const { searchParams } = new URL(req.url);
   const difficultyParam = searchParams.get("difficulty"); // "all" | "0".."5" | null

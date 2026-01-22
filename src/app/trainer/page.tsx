@@ -1,452 +1,368 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, Suspense } from "react";
 import "katex/dist/katex.min.css";
 import { BlockMath, InlineMath } from "react-katex";
 import nerdamer from "nerdamer";
 import "nerdamer/Algebra";
 import "nerdamer/Calculus";
 import { useSession } from "next-auth/react";
+import { useRouter, useSearchParams } from "next/navigation";
+import confetti from "canvas-confetti";
+import Link from "next/link"; // Added Link import
 
 type Problem = {
-  id: string; // text
+  id: string;
   problem_text: string;
   problem_answer_latex: string;
   problem_answer_computed: string;
   source?: string | null;
-  difficulty?: number | null; // 0..5, 0 = unrated
+  difficulty?: number | null;
 };
 
 type ProgressMap = Record<string, { solved: boolean; attempts: number }>;
 
-export default function IntegralTrainer() {
-  const { data: session } = useSession();
+function TrainerContent() {
+  const { data: session, status } = useSession();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const activeId = searchParams.get("id");
 
-  // --- STATE ---
   const [problems, setProblems] = useState<Problem[]>([]);
   const [progress, setProgress] = useState<ProgressMap>({});
-
+  
   const [searchQuery, setSearchQuery] = useState("");
   const [difficultyFilter, setDifficultyFilter] = useState<number | "all">("all");
-
-  const [showList, setShowList] = useState(false);
-
-  // currentIdx indexes into `problems` (master list)
-  const [currentIdx, setCurrentIdx] = useState<number | null>(null);
-
+  const [statusFilter, setStatusFilter] = useState<"all" | "solved" | "unsolved">("all");
+  
   const [userInput, setUserInput] = useState("");
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; msg: string } | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isShaking, setIsShaking] = useState(false);
 
-  // --- FETCH ---
+  // --- FETCH DATA ---
   useEffect(() => {
     let mounted = true;
-
+    
+    // 1. Get Problems
     fetch("/api/integrals")
       .then((res) => res.json())
       .then((data) => {
         if (!mounted) return;
         if (Array.isArray(data)) setProblems(data);
         setLoading(false);
-      })
-      .catch(() => {
-        if (!mounted) return;
-        setLoading(false);
       });
 
-    if (session) {
+    // 2. Get Progress (Only if authenticated)
+    if (status === "authenticated") {
       fetch("/api/progress")
         .then((res) => res.json())
         .then((data) => {
-          if (!mounted) return;
-          setProgress(data || {});
+          if (mounted && data && !data.error) {
+            setProgress(data);
+          }
         })
-        .catch((err) => console.error("Failed to load progress:", err));
+        .catch(console.error);
     }
+    
+    return () => { mounted = false; };
+  }, [status]); 
 
-    return () => {
-      mounted = false;
-    };
-  }, [session]);
+  const activeProblem = useMemo(() => 
+    problems.find((p) => p.id === activeId), 
+  [problems, activeId]);
 
-  // --- FILTERED LIST ---
+  useEffect(() => {
+    setUserInput("");
+    setFeedback(null);
+    setIsShaking(false);
+  }, [activeId]);
+
   const filteredProblems = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-
+    
     return problems.filter((p) => {
       const matchesSearch = p.id.toLowerCase().includes(q);
-      const d = typeof p.difficulty === "number" ? p.difficulty : 0; // treat missing as unrated
+      const d = typeof p.difficulty === "number" ? p.difficulty : 0;
       const matchesDifficulty = difficultyFilter === "all" ? true : d === difficultyFilter;
-      return matchesSearch && matchesDifficulty;
+      
+      const isSolved = !!progress[p.id]?.solved;
+      let matchesStatus = true;
+      if (statusFilter === "solved") matchesStatus = isSolved;
+      if (statusFilter === "unsolved") matchesStatus = !isSolved;
+
+      return matchesSearch && matchesDifficulty && matchesStatus;
     });
-  }, [problems, searchQuery, difficultyFilter]);
+  }, [problems, searchQuery, difficultyFilter, statusFilter, progress]);
 
-  const activeProblem: Problem | null =
-    currentIdx == null ? null : problems[currentIdx] ?? null;
+  // --- ACTIONS ---
+  const triggerConfetti = () => {
+    confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
+  };
 
-  // If list is open and filters hide the selected problem, snap to first visible
-  useEffect(() => {
-    if (!showList) return;
-    if (filteredProblems.length === 0) return;
+  const triggerShake = () => {
+    setIsShaking(true);
+    setTimeout(() => setIsShaking(false), 500);
+  };
 
-    if (currentIdx == null) {
-      const firstId = filteredProblems[0].id;
-      const idx = problems.findIndex((p) => p.id === firstId);
-      if (idx !== -1) setCurrentIdx(idx);
-      return;
-    }
-
-    const active = problems[currentIdx];
-    const stillVisible = !!active && filteredProblems.some((p) => p.id === active.id);
-    if (!stillVisible) {
-      const firstId = filteredProblems[0].id;
-      const idx = problems.findIndex((p) => p.id === firstId);
-      if (idx !== -1) {
-        setCurrentIdx(idx);
-        setFeedback(null);
-        setUserInput("");
-      }
-    }
-  }, [showList, filteredProblems, problems, currentIdx]);
-
-  // --- CHECK ANSWER ---
   const checkAnswer = async () => {
     if (!activeProblem || !userInput) return;
-
+    
     let isCorrect = false;
-
     try {
       const expected = activeProblem.problem_answer_computed;
       const expr = nerdamer(`(${userInput}) - (${expected})`);
       const diff = (expr as any).simplify().toString();
-
       if (diff === "0") {
         setFeedback({ type: "success", msg: "Correct!" });
         isCorrect = true;
+        triggerConfetti();
       } else {
-        setFeedback({ type: "error", msg: "Incorrect. Try again!" });
+        setFeedback({ type: "error", msg: "Incorrect." });
+        triggerShake();
       }
     } catch {
-      setFeedback({ type: "error", msg: "Syntax Error. Use ^ for powers." });
+      setFeedback({ type: "error", msg: "Syntax Error" });
+      triggerShake();
       return;
     }
 
     if (session) {
-      // optimistic UI
+      // Optimistic update
       setProgress((prev) => {
         const cur = prev[activeProblem.id] || { solved: false, attempts: 0 };
-        return {
-          ...prev,
-          [activeProblem.id]: {
-            solved: cur.solved || isCorrect,
-            attempts: cur.attempts + 1,
-          },
+        return { 
+          ...prev, 
+          [activeProblem.id]: { 
+            solved: cur.solved || isCorrect, 
+            attempts: cur.attempts + 1 
+          } 
         };
       });
 
-      try {
-        await fetch("/api/progress", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ problemId: activeProblem.id, isCorrect }),
-        });
-      } catch (err) {
-        console.error("Failed to save progress", err);
-      }
+      // DB update
+      await fetch("/api/progress", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ problemId: activeProblem.id, isCorrect }),
+      });
     }
   };
 
-  const pillClass = (active: boolean) =>
-    `px-3 py-1 rounded-full text-[11px] font-bold border transition-all ${
-      active
-        ? "bg-blue-600/20 border-blue-500 text-blue-300"
-        : "bg-transparent border-gray-700 text-gray-400 hover:bg-gray-800"
-    }`;
+  const navigateToProblem = (id: string) => router.push(`/trainer?id=${id}`);
+  const navigateToDashboard = () => router.push(`/trainer`);
 
-  if (loading) {
+  if (loading) return <div className="h-screen bg-black text-white flex items-center justify-center">Loading...</div>;
+
+  // === VIEW 1: PROBLEM PAGE ===
+  if (activeProblem) {
+    const isSolved = progress[activeProblem.id]?.solved;
+    const attempts = progress[activeProblem.id]?.attempts || 0;
+
     return (
-      <div className="h-screen bg-[#0d1117] text-white flex items-center justify-center font-mono animate-pulse">
-        Loading Trainer...
-      </div>
-    );
-  }
+      <div className="min-h-screen bg-[#050505] text-slate-300 font-sans flex flex-col pt-16">
+        <nav className="px-6 py-4 flex justify-between items-center">
+          <button onClick={navigateToDashboard} className="flex items-center gap-2 text-slate-500 hover:text-white transition-colors group">
+            <span className="text-xl group-hover:-translate-x-1">←</span>
+            <span className="text-sm font-bold uppercase tracking-wider">Back to Dashboard</span>
+          </button>
+          
+          <Link href="/formatting" className="text-xs font-bold text-blue-500 hover:text-blue-400 uppercase tracking-wide">
+             Formatting Help
+          </Link>
+        </nav>
 
-  return (
-    <div className="min-h-screen bg-[#0d1117] text-gray-200 font-sans pt-16">
-      {/* TOP CONTROL BAR */}
-      <div className="sticky top-16 z-40 border-b border-gray-800 bg-[#0d1117]/70 backdrop-blur">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex flex-col gap-3">
-          <div className="flex items-center justify-between gap-4">
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="text-white font-bold tracking-tight text-lg whitespace-nowrap">
-                Problem Set
-              </div>
-
-              <div className="hidden sm:flex text-[11px] text-gray-500">
-                {problems.length} total
-                {showList ? (
-                  <>
-                    <span className="mx-2">•</span>
-                    Showing <span className="text-gray-200 font-bold mx-1">{filteredProblems.length}</span>
-                  </>
-                ) : null}
+        <main className="flex-1 max-w-6xl mx-auto w-full px-4 flex flex-col justify-center pb-20">
+          <div className="space-y-12">
+            <div className={`relative p-12 rounded-[40px] border shadow-2xl ${
+              isSolved ? "bg-emerald-900/10 border-emerald-500/20" : "bg-white/5 border-white/10"
+            }`}>
+              <div className="flex flex-col items-center gap-6">
+                <div className="flex gap-2">
+                  <span className="px-3 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-400 text-xs font-bold uppercase">
+                    {activeProblem.id}
+                  </span>
+                  {attempts > 0 && (
+                     <span className={`px-3 py-1 rounded-full border text-xs font-bold uppercase ${
+                       isSolved ? "bg-emerald-500/10 border-emerald-500 text-emerald-400" : "bg-red-500/10 border-red-500 text-red-400"
+                     }`}>
+                       {isSolved ? "Solved" : `${attempts} Attempts`}
+                     </span>
+                  )}
+                </div>
+                <div className="text-4xl md:text-6xl text-white">
+                  <BlockMath math={activeProblem.problem_text} />
+                </div>
               </div>
             </div>
 
-            <button
-              onClick={() => setShowList((v) => !v)}
-              className={`px-4 py-2 rounded-xl font-bold text-sm border transition-all ${
-                showList
-                  ? "bg-gray-900/40 border-gray-700 text-gray-200 hover:bg-gray-900/60"
-                  : "bg-blue-600 border-blue-500 text-white hover:bg-blue-500"
-              }`}
-            >
-              {showList ? "Hide list" : "Browse problems"}
-            </button>
-          </div>
-
-          {/* Controls row */}
-          <div className="flex flex-col lg:flex-row lg:items-center gap-3">
-            <div className="flex-1">
-              <input
-                type="text"
-                placeholder="Search ID (e.g. 2010-Q01)"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full bg-[#0b1220] border border-gray-700 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 text-gray-200 placeholder-gray-500 transition-all"
-              />
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-[10px] uppercase tracking-widest text-gray-500 font-bold mr-1">
-                Difficulty
-              </span>
-
-              <button
-                onClick={() => setDifficultyFilter("all")}
-                className={pillClass(difficultyFilter === "all")}
-              >
-                All
-              </button>
-
-              <button
-                onClick={() => setDifficultyFilter(0)}
-                className={pillClass(difficultyFilter === 0)}
-              >
-                Unrated
-              </button>
-
-              {[1, 2, 3, 4, 5].map((d) => (
-                <button
-                  key={d}
-                  onClick={() => setDifficultyFilter(d)}
-                  className={pillClass(difficultyFilter === d)}
-                >
-                  {d}
+            <div className="max-w-2xl mx-auto space-y-4">
+              <div className={`relative ${isShaking ? "animate-shake" : ""}`}>
+                <input
+                  value={userInput}
+                  onChange={(e) => setUserInput(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && checkAnswer()}
+                  placeholder={isSolved ? "Solved!" : "Answer..."}
+                  className={`w-full border-2 p-6 rounded-3xl text-2xl font-mono text-white bg-white/5 focus:outline-none transition-all ${
+                    isShaking ? "border-red-500" : isSolved ? "border-emerald-500/50" : "border-white/10 focus:border-blue-500"
+                  }`}
+                />
+                <button onClick={checkAnswer} className="absolute right-3 top-3 bottom-3 px-8 rounded-2xl bg-white text-black font-bold uppercase hover:bg-blue-500 hover:text-white transition-all">
+                  {isSolved ? "Check" : "Submit"}
                 </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* PROBLEM LIST PANEL (hidden until Browse problems) */}
-      {showList && (
-        <div className="max-w-6xl mx-auto px-6 py-6">
-          <div className="bg-[#161b22] border border-gray-800 rounded-2xl shadow-2xl overflow-hidden">
-            <div className="px-5 py-4 border-b border-gray-800 flex items-center justify-between">
-              <div className="text-sm text-gray-400">
-                Showing <span className="text-gray-200 font-bold">{filteredProblems.length}</span> /{" "}
-                <span className="text-gray-200 font-bold">{problems.length}</span>
               </div>
-
-              <button
-                onClick={() => {
-                  setSearchQuery("");
-                  setDifficultyFilter("all");
-                }}
-                className="text-xs font-bold px-3 py-2 rounded-xl border border-gray-700 text-gray-300 hover:bg-gray-900/40 transition-all"
-              >
-                Reset filters
-              </button>
-            </div>
-
-            <div className="max-h-[40vh] overflow-y-auto custom-scrollbar p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {filteredProblems.length > 0 ? (
-                filteredProblems.map((p) => {
-                  const originalIndex = problems.findIndex((op) => op.id === p.id);
-                  const pStats = progress[p.id];
-                  const isSelected = currentIdx === originalIndex;
-                  const isSolved = pStats?.solved;
-                  const isAttempted = !isSolved && (pStats?.attempts ?? 0) > 0;
-
-                  const d = typeof p.difficulty === "number" ? p.difficulty : 0;
-
-                  let styleClass =
-                    "bg-transparent border-gray-800 hover:bg-gray-900/30 text-gray-300";
-
-                  if (isSolved) {
-                    styleClass =
-                      "bg-green-900/15 border-green-900/50 text-green-200 hover:bg-green-900/25";
-                  } else if (isAttempted) {
-                    styleClass =
-                      "bg-red-900/15 border-red-900/50 text-red-200 hover:bg-red-900/25";
-                  }
-
-                  if (isSelected) {
-                    styleClass +=
-                      " ring-1 ring-blue-500/50 border-blue-500 shadow-[0_0_18px_rgba(59,130,246,0.18)]";
-                  }
-
-                  return (
-                    <button
-                      key={p.id}
-                      onClick={() => {
-                        if (originalIndex !== -1) setCurrentIdx(originalIndex);
-                        setFeedback(null);
-                        setUserInput("");
-                        // optional: collapse list after picking
-                        setShowList(false);
-                      }}
-                      className={`text-left w-full px-4 py-3 rounded-2xl border transition-all ${styleClass}`}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <div className="font-mono font-bold truncate">{p.id}</div>
-                          <div className="mt-1 flex items-center gap-2">
-                            <span className="text-[10px] uppercase tracking-tight opacity-70">
-                              {isSolved ? "Solved" : isAttempted ? "Attempted" : "Integration Bee"}
-                            </span>
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-gray-900/40 border border-gray-700 text-gray-300">
-                              {d === 0 ? "Unrated" : `D${d}`}
-                            </span>
-                          </div>
-                        </div>
-
-                        {isAttempted && (
-                          <span className="text-[10px] font-bold bg-red-500/20 px-2 py-1 rounded text-red-300 shrink-0">
-                            {pStats!.attempts}x
-                          </span>
-                        )}
-                      </div>
-                    </button>
-                  );
-                })
-              ) : (
-                <div className="col-span-full text-center py-10 text-gray-500 text-sm italic">
-                  No problems found.
+              {feedback && (
+                <div className={`p-4 rounded-xl text-center font-bold ${
+                  feedback.type === "success" ? "text-emerald-400 bg-emerald-500/10" : "text-red-400 bg-red-500/10"
+                }`}>
+                  {feedback.msg}
                 </div>
               )}
             </div>
           </div>
-        </div>
-      )}
+        </main>
+      </div>
+    );
+  }
 
-      {/* MAIN SOLVING AREA */}
-      <main className="max-w-6xl mx-auto px-6 pb-16">
-        <div className="flex items-center justify-center">
-          <div className="w-full max-w-3xl bg-[#161b22] p-10 rounded-3xl border border-gray-800 shadow-2xl relative overflow-hidden group mt-10">
-            <div className="absolute -top-24 -left-24 w-48 h-48 bg-blue-600/10 rounded-full blur-3xl group-hover:bg-blue-600/20 transition-all duration-500" />
+  // === VIEW 2: DASHBOARD ===
+  return (
+    <div className="min-h-screen bg-[#050505] text-slate-300 font-sans pt-16">
+      
+      {/* IMPROVED HEADER SECTION */}
+      <div className="sticky top-16 z-40 bg-[#050505]/95 backdrop-blur-md border-b border-white/5 shadow-2xl">
+        <div className="max-w-7xl mx-auto px-6 py-4 space-y-4">
+          
+          {/* Row 1: Search + Link */}
+          <div className="flex gap-4">
+            <input 
+              type="text"
+              placeholder="Search problems by ID..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full bg-[#111] border border-white/10 rounded-xl px-5 py-3 text-sm text-white placeholder-gray-600 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all"
+            />
+            {/* Added Link Here */}
+            <Link 
+              href="/formatting"
+              className="hidden md:flex items-center px-6 rounded-xl bg-blue-500/10 border border-blue-500/30 text-blue-400 text-xs font-bold uppercase hover:bg-blue-500 hover:text-white transition-all whitespace-nowrap"
+            >
+              Formatting Guide
+            </Link>
+          </div>
+          
+          {/* Mobile Link (Visible only on small screens) */}
+          <div className="md:hidden">
+             <Link 
+              href="/formatting"
+              className="block w-full text-center py-2 rounded-lg bg-blue-500/10 border border-blue-500/30 text-blue-400 text-xs font-bold uppercase"
+            >
+              Formatting Guide
+            </Link>
+          </div>
 
-            {activeProblem ? (
-              <div className="relative z-10">
-                <header className="mb-10 text-center">
-                  <div className="flex items-center justify-center gap-2">
-                    <span className="px-3 py-1 bg-blue-500/10 text-blue-400 rounded-full text-[10px] font-bold tracking-widest uppercase border border-blue-500/20">
-                      {activeProblem.id}
-                    </span>
-
-                    <span className="px-3 py-1 bg-gray-900/40 text-gray-300 rounded-full text-[10px] font-bold tracking-widest uppercase border border-gray-700">
-                      {(() => {
-                        const d =
-                          typeof activeProblem.difficulty === "number"
-                            ? activeProblem.difficulty
-                            : 0;
-                        return d === 0 ? "UNRATED" : `DIFFICULTY ${d}`;
-                      })()}
-                    </span>
-                  </div>
-
-                  <div className="mt-10 text-4xl py-6 flex justify-center">
-                    <BlockMath math={activeProblem.problem_text} />
-                  </div>
-                </header>
-
-                <div className="space-y-6">
-                  <input
-                    type="text"
-                    value={userInput}
-                    onChange={(e) => setUserInput(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && checkAnswer()}
-                    placeholder="Enter answer (e.g. x^2/2 + C)"
-                    className="w-full bg-[#0d1117] border-2 border-gray-800 p-5 rounded-2xl text-xl font-mono focus:border-blue-500/50 focus:ring-4 focus:ring-blue-500/5 outline-none transition-all shadow-inner placeholder:text-gray-700 text-white"
-                  />
-
-                  <button
-                    onClick={checkAnswer}
-                    className="w-full bg-blue-600 hover:bg-blue-500 text-white py-5 rounded-2xl font-bold text-xl shadow-[0_10px_20px_rgba(59,130,246,0.3)] transition-all active:scale-[0.97]"
-                  >
-                    Submit
-                  </button>
-
-                  {feedback && (
-                    <div
-                      className={`p-5 rounded-2xl border-2 animate-in fade-in slide-in-from-bottom-2 duration-300 ${
-                        feedback.type === "success"
-                          ? "bg-green-500/5 border-green-500/30 text-green-400"
-                          : "bg-red-500/5 border-red-500/30 text-red-400"
-                      }`}
-                    >
-                      <div className="flex items-center gap-3">
-                        <span className="text-xl">{feedback.type === "success" ? "✨" : "⚠️"}</span>
-                        <p className="font-bold">{feedback.msg}</p>
-                      </div>
-
-                      {feedback.type === "success" && (
-                        <div className="mt-3 pt-3 border-t border-green-500/10 text-sm">
-                          <span className="opacity-60 block mb-1 uppercase text-[10px] font-bold">
-                            Standard Form:
-                          </span>
-                          <InlineMath math={activeProblem.problem_answer_latex} />
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-            ) : (
-              <div className="relative z-10 text-center text-gray-500 py-16">
-                <div className="text-white font-bold text-xl mb-2">Pick a problem to begin</div>
-                <div className="text-sm text-gray-500 mb-6">
-                  Use the top bar to search/filter, then click <span className="text-gray-300 font-bold">Browse problems</span>.
-                </div>
-                <button
-                  onClick={() => setShowList(true)}
-                  className="px-5 py-3 rounded-2xl bg-blue-600 hover:bg-blue-500 text-white font-bold transition-all"
+          {/* Row 2: Controls */}
+          <div className="flex flex-col md:flex-row gap-4 items-start md:items-center">
+            
+            {/* Status Filter */}
+            <div className="flex bg-[#111] p-1 rounded-xl border border-white/5">
+              {(["all", "solved", "unsolved"] as const).map((s) => (
+                <button 
+                  key={s} 
+                  onClick={() => setStatusFilter(s)} 
+                  className={`px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wide transition-all ${
+                    statusFilter === s 
+                      ? "bg-blue-600 text-white shadow-lg shadow-blue-900/20" 
+                      : "text-gray-500 hover:text-white hover:bg-white/5"
+                  }`}
                 >
-                  Browse problems
+                  {s}
                 </button>
+              ))}
+            </div>
+
+            <div className="hidden md:block w-px h-8 bg-white/10"></div>
+
+            {/* Difficulty Filter (Scrollable) */}
+            <div className="flex-1 overflow-x-auto no-scrollbar w-full">
+              <div className="flex gap-2">
+                {["all", 0, 1, 2, 3, 4, 5].map((d) => (
+                  <button
+                    key={d}
+                    onClick={() => setDifficultyFilter(d as any)}
+                    className={`whitespace-nowrap px-4 py-2 rounded-lg text-xs font-bold uppercase transition-all border ${
+                      difficultyFilter === d 
+                        ? "bg-white text-black border-white shadow-lg" 
+                        : "bg-[#111] border-white/5 text-gray-500 hover:text-white hover:border-white/20"
+                    }`}
+                  >
+                    {d === "all" ? "All Difficulties" : d === 0 ? "Unrated" : `Difficulty ${d}`}
+                  </button>
+                ))}
               </div>
-            )}
+            </div>
+
           </div>
         </div>
-      </main>
+      </div>
 
+      <main className="max-w-7xl mx-auto px-6 py-8">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {filteredProblems.map((p) => {
+            const pStats = progress[p.id];
+            const isSolved = pStats?.solved;
+            const attempts = pStats?.attempts || 0;
+            const isWrong = !isSolved && attempts > 0;
+
+            // --- COLOR LOGIC FOR TILES ---
+            let cardStyle = "bg-[#0a0a0a] border-white/5 hover:border-blue-500/50"; // Default
+            
+            if (isSolved) {
+               cardStyle = "bg-emerald-900/40 border-emerald-500/50 hover:bg-emerald-900/60 shadow-[0_0_20px_rgba(16,185,129,0.1)]"; 
+            } else if (isWrong) {
+               cardStyle = "bg-red-900/40 border-red-500/50 hover:bg-red-900/60 shadow-[0_0_20px_rgba(239,68,68,0.1)]";
+            }
+
+            return (
+              <button
+                key={p.id}
+                onClick={() => navigateToProblem(p.id)}
+                className={`group p-6 rounded-3xl border text-left transition-all hover:-translate-y-1 ${cardStyle}`}
+              >
+                <div className="flex justify-between items-start mb-6">
+                  <span className={`font-mono text-xs font-bold ${isSolved ? "text-emerald-400" : isWrong ? "text-red-400" : "text-slate-500"}`}>
+                    {p.id}
+                  </span>
+                </div>
+                
+                <div className="mt-8 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className={`w-1.5 h-1.5 rounded-full ${isSolved ? "bg-emerald-500" : isWrong ? "bg-red-500" : "bg-slate-700"}`} />
+                    <span className={`text-[10px] font-bold uppercase tracking-wider ${isSolved ? "text-emerald-400" : isWrong ? "text-red-400" : "text-slate-500"}`}>
+                      {isSolved ? "Solved" : isWrong ? `${attempts} attempt(s)` : "Start"}
+                    </span>
+                  </div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </main>
       <style jsx global>{`
-        .custom-scrollbar::-webkit-scrollbar {
-          width: 8px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-track {
-          background: transparent;
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb {
-          background: #30363d;
-          border-radius: 999px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-          background: #484f58;
-        }
+        @keyframes shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-5px); } 75% { transform: translateX(5px); } }
+        .animate-shake { animation: shake 0.4s cubic-bezier(.36,.07,.19,.97) both; }
+        .katex-display { margin: 0 !important; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
       `}</style>
     </div>
+  );
+}
+
+export default function IntegralTrainer() {
+  return (
+    <Suspense fallback={<div className="h-screen bg-black flex items-center justify-center text-white">Loading...</div>}>
+      <TrainerContent />
+    </Suspense>
   );
 }

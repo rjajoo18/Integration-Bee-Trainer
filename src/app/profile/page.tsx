@@ -13,17 +13,26 @@ type Profile = {
 };
 
 export default function ProfilePage() {
-  const { status } = useSession();
+  const { data: session, status, update } = useSession();
+  
   const [profile, setProfile] = useState<Profile | null>(null);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<string>("");
 
   useEffect(() => {
     if (status !== "authenticated") return;
+    
+    // Fetch profile data
     fetch("/api/profile")
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error("Load failed");
+        return r.json();
+      })
       .then(setProfile)
-      .catch(() => setMsg("Failed to load profile"));
+      .catch((err) => {
+        console.error(err);
+        setMsg("Failed to load profile");
+      });
   }, [status]);
 
   if (status === "loading") return <div className="p-6 text-white">Loading…</div>;
@@ -36,44 +45,99 @@ export default function ProfilePage() {
     setSaving(true);
     setMsg("");
 
-    const res = await fetch("/api/profile", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: p.name,
-        bio: p.bio,
-        isPublic: p.is_public,
-        image: p.image,
-      }),
-    });
+    try {
+      const res = await fetch("/api/profile", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: p.name,
+          bio: p.bio,
+          isPublic: p.is_public,
+          image: p.image,
+        }),
+      });
 
-    const data = await res.json().catch(() => ({}));
-    setSaving(false);
+      const data = await res.json();
+      setSaving(false);
 
-    if (!res.ok) {
-      setMsg((data as any)?.error ?? "Save failed");
-      return;
+      if (!res.ok) {
+        setMsg(data.error || "Save failed");
+        return;
+      }
+
+      setProfile(data);
+      
+      // Update session so Navbar reflects changes immediately
+      await update({
+        ...session,
+        user: {
+          ...session?.user,
+          name: data.name,
+          image: data.image,
+        },
+      });
+
+      setMsg("Saved!");
+      setTimeout(() => setMsg(""), 1500);
+    } catch (err) {
+      setSaving(false);
+      setMsg("Connection error");
     }
-
-    setProfile(data);
-    setMsg("Saved!");
-    setTimeout(() => setMsg(""), 1500);
   }
+
+  // --- NEW: Image Compressor ---
+  // This takes the file, draws it to a small canvas (128x128), and returns a tiny Data URL
+  const resizeImage = (file: File): Promise<string> => {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = (event) => {
+        const img = new Image();
+        img.src = event.target?.result as string;
+        img.onload = () => {
+          const canvas = document.createElement("canvas");
+          const MAX_WIDTH = 128; // Small size for avatars
+          const MAX_HEIGHT = 128;
+          
+          let width = img.width;
+          let height = img.height;
+
+          // Maintain aspect ratio
+          if (width > height) {
+            if (width > MAX_WIDTH) {
+              height *= MAX_WIDTH / width;
+              width = MAX_WIDTH;
+            }
+          } else {
+            if (height > MAX_HEIGHT) {
+              width *= MAX_HEIGHT / height;
+              height = MAX_HEIGHT;
+            }
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext("2d");
+          ctx?.drawImage(img, 0, 0, width, height);
+          
+          // Convert to JPEG with 0.8 quality (very small size)
+          resolve(canvas.toDataURL("image/jpeg", 0.8));
+        };
+      };
+    });
+  };
 
   async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.size > 300_000) {
-      setMsg("Image too big. Use < 300KB for now.");
-      return;
+    // Use the compressor
+    try {
+      const smallImage = await resizeImage(file);
+      setProfile((prev) => (prev ? { ...prev, image: smallImage } : prev));
+    } catch (err) {
+      setMsg("Failed to process image");
     }
-
-    const reader = new FileReader();
-    reader.onload = () => {
-      setProfile((prev) => (prev ? { ...prev, image: String(reader.result) } : prev));
-    };
-    reader.readAsDataURL(file);
   }
 
   const msgClass =
@@ -112,7 +176,7 @@ export default function ProfilePage() {
               <label className="cursor-pointer">
                 <div className="w-full rounded-xl border-2 border-dashed border-gray-700 bg-[#0d1117] px-6 py-4
                   text-center text-gray-400 hover:border-blue-500/50 hover:bg-[#0d1117]/80 transition-all">
-                  <div className="text-sm font-medium">Click to upload image</div>
+                  <div className="text-sm font-medium">Click to upload new image</div>
                 </div>
                 <input
                   type="file"

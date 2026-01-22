@@ -31,10 +31,6 @@ export default function HomePage() {
           </Link>
         </div>
       </main>
-
-      <footer className="absolute bottom-10 w-full text-center text-gray-600 font-mono text-[10px] uppercase tracking-[0.4em]">
-        Designed for Excellence • Powered by Neon
-      </footer>
     </div>
   );
 }

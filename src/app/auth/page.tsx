@@ -1,35 +1,52 @@
 'use client';
-import { signIn } from 'next-auth/react';
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
 
-export default function AuthPage() {
+import { signIn } from 'next-auth/react';
+import { useState, useEffect, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+
+function AuthContent() {
   const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const urlError = searchParams?.get('error');
+
+  useEffect(() => {
+    if (urlError) {
+      if (urlError === 'OAuthAccountNotLinked') {
+        setError('This email is already used by another account.');
+      } else {
+        setError('Authentication failed. Check your details.');
+      }
+    }
+  }, [urlError]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
 
     if (isSignUp) {
-      // 1. Handle Registration
-      const res = await fetch('/api/register', {
-        method: 'POST',
-        body: JSON.stringify({ email, password }),
-        headers: { 'Content-Type': 'application/json' }
-      });
-      
-      if (res.ok) {
-        setIsSignUp(false);
-        alert("Account created! Please sign in.");
-      } else {
-        setError("User already exists or registration failed.");
+      try {
+        const res = await fetch('/api/register', {
+          method: 'POST',
+          body: JSON.stringify({ email, password }),
+          headers: { 'Content-Type': 'application/json' }
+        });
+        
+        const data = await res.json();
+        
+        if (res.ok) {
+          setIsSignUp(false);
+          alert("Account created! Please sign in.");
+        } else {
+          setError(data.error || "Registration failed.");
+        }
+      } catch (err) {
+        setError("Connection failed. Please try again.");
       }
     } else {
-      // 2. Handle Login
       const result = await signIn('credentials', {
         email,
         password,
@@ -37,9 +54,10 @@ export default function AuthPage() {
       });
 
       if (result?.error) {
-        setError("Invalid credentials.");
-      } else {
+        setError("Invalid email or password.");
+      } else if (result?.ok) {
         router.push('/trainer');
+        router.refresh();
       }
     }
   };
@@ -51,10 +69,11 @@ export default function AuthPage() {
           {isSignUp ? 'Join the Bee' : 'Welcome Back'}
         </h2>
 
-        {/* Google OAuth Button */}
+        {/* Google Button - Added cursor-pointer */}
         <button 
+          type="button"
           onClick={() => signIn('google', { callbackUrl: '/trainer' })}
-          className="w-full flex items-center justify-center gap-3 bg-white text-black py-3 rounded-xl font-bold hover:bg-gray-100 transition mb-6"
+          className="w-full flex items-center justify-center gap-3 bg-white text-black py-3 rounded-xl font-bold hover:bg-gray-100 transition mb-6 cursor-pointer"
         >
           <img src="https://authjs.dev/img/providers/google.svg" width="20" alt="Google" />
           Continue with Google
@@ -70,29 +89,47 @@ export default function AuthPage() {
           <input 
             type="email" placeholder="Email" value={email}
             onChange={(e) => setEmail(e.target.value)}
-            className="w-full bg-[#0d1117] border border-gray-700 p-4 rounded-xl focus:border-blue-500 outline-none transition"
+            className="w-full bg-[#0d1117] border border-gray-700 p-4 rounded-xl focus:border-blue-500 outline-none transition text-white"
             required
           />
           <input 
             type="password" placeholder="Password" value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="w-full bg-[#0d1117] border border-gray-700 p-4 rounded-xl focus:border-blue-500 outline-none transition"
+            className="w-full bg-[#0d1117] border border-gray-700 p-4 rounded-xl focus:border-blue-500 outline-none transition text-white"
             required
           />
-          {error && <p className="text-red-500 text-sm font-medium">{error}</p>}
+          {error && (
+            <div className="bg-red-500/10 border border-red-500/50 p-3 rounded-lg text-red-400 text-sm text-center">
+              {error}
+            </div>
+          )}
           
-          <button className="w-full bg-blue-600 hover:bg-blue-500 text-white py-4 rounded-xl font-bold transition shadow-lg shadow-blue-900/20">
+          {/* Submit Button - Added cursor-pointer */}
+          <button className="w-full bg-blue-600 hover:bg-blue-500 text-white py-4 rounded-xl font-bold transition shadow-lg shadow-blue-900/20 cursor-pointer">
             {isSignUp ? 'Create Account' : 'Sign In'}
           </button>
         </form>
 
         <p className="mt-8 text-center text-gray-400 text-sm">
           {isSignUp ? "Already a member?" : "New to the trainer?"}{' '}
-          <button onClick={() => setIsSignUp(!isSignUp)} className="text-blue-500 hover:underline font-bold">
+          {/* Toggle Link - Added cursor-pointer */}
+          <button 
+            type="button"
+            onClick={() => { setIsSignUp(!isSignUp); setError(''); }} 
+            className="text-blue-500 hover:underline font-bold cursor-pointer"
+          >
             {isSignUp ? 'Sign In' : 'Sign Up'}
           </button>
         </p>
       </div>
     </div>
+  );
+}
+
+export default function AuthPage() {
+  return (
+    <Suspense fallback={<div className="h-screen bg-[#0d1117] flex items-center justify-center text-white">Loading...</div>}>
+      <AuthContent />
+    </Suspense>
   );
 }

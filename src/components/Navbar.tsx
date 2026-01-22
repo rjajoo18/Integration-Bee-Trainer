@@ -41,7 +41,6 @@ export default function Navbar() {
             Battle
           </Link>
 
-          
           {/* Auth State Logic */}
           {status === 'authenticated' ? (
             <div className="relative ml-4" ref={dropdownRef}>
@@ -54,9 +53,19 @@ export default function Navbar() {
                   <p className="text-xs text-white font-bold">{session.user?.name || "User"}</p>
                   <p className="text-[10px] text-gray-500 font-mono truncate max-w-[120px]">{session.user?.email}</p>
                 </div>
-                <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 border border-blue-400/30 flex items-center justify-center text-white font-bold shadow-[0_0_10px_rgba(59,130,246,0.3)] hover:shadow-[0_0_15px_rgba(59,130,246,0.5)] transition-all">
-                  {session.user?.email?.charAt(0).toUpperCase()}
-                </div>
+                
+                {/* IMAGE LOGIC ADDED HERE */}
+                {session.user?.image ? (
+                   <img 
+                     src={session.user.image} 
+                     alt="Profile" 
+                     className="w-9 h-9 rounded-full border border-blue-400/30 object-cover shadow-[0_0_10px_rgba(59,130,246,0.3)] hover:shadow-[0_0_15px_rgba(59,130,246,0.5)] transition-all"
+                   />
+                ) : (
+                   <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 border border-blue-400/30 flex items-center justify-center text-white font-bold shadow-[0_0_10px_rgba(59,130,246,0.3)] hover:shadow-[0_0_15px_rgba(59,130,246,0.5)] transition-all">
+                     {session.user?.email?.charAt(0).toUpperCase()}
+                   </div>
+                )}
               </button>
 
               {/* Dropdown Menu */}
