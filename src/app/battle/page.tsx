@@ -1,12 +1,24 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
+import { 
+  Shield, 
+  Users, 
+  Clock, 
+  Lock, 
+  Swords, 
+  Search, 
+  RefreshCw, 
+  Plus, 
+  Trophy,
+  Hash
+} from 'lucide-react';
 
 type Room = {
   id: string;
   name: string;
-  difficulty: number;        // exact rating bucket (1..10 etc)
-  secondsPerProblem: number; // time limit
+  difficulty: number;
+  secondsPerProblem: number;
   maxPlayers: number;
   playerCount: number;
   hasPassword: boolean;
@@ -39,7 +51,6 @@ export default function BattleLobbyPage() {
   const [showOpenOnly, setShowOpenOnly] = useState(true);
 
   // --- Create/Join feedback ---
-  const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [actionErr, setActionErr] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
 
@@ -60,7 +71,7 @@ export default function BattleLobbyPage() {
 
   useEffect(() => {
     fetchRooms();
-    const t = setInterval(fetchRooms, 2500); // MVP polling (swap to websocket later)
+    const t = setInterval(fetchRooms, 3000); 
     return () => clearInterval(t);
   }, []);
 
@@ -83,7 +94,6 @@ export default function BattleLobbyPage() {
   }, [rooms, search, showOpenOnly]);
 
   async function createRoom() {
-    setActionMsg(null);
     setActionErr(null);
     setCreating(true);
     try {
@@ -103,7 +113,6 @@ export default function BattleLobbyPage() {
       const j = await r.json();
       if (!r.ok) throw new Error(j?.error ?? 'Failed to create room');
 
-      // redirect to room page
       window.location.href = `/battle/room/${j.room.id}`;
     } catch (e: any) {
       setActionErr(e?.message ?? 'Failed to create room');
@@ -113,13 +122,11 @@ export default function BattleLobbyPage() {
   }
 
   async function joinRoom(roomId: string, needsPassword: boolean) {
-    setActionMsg(null);
     setActionErr(null);
-
     let pwd: string | null = null;
     if (needsPassword) {
       const entered = window.prompt('Enter room password:');
-      if (entered === null) return; // cancel
+      if (entered === null) return; 
       pwd = entered.trim();
     }
 
@@ -139,177 +146,228 @@ export default function BattleLobbyPage() {
   }
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100">
-      {/* Top Bar */}
-      <div className="sticky top-0 z-20 border-b border-zinc-800 bg-zinc-950/90 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl flex-col gap-3 px-4 py-4 md:flex-row md:items-end md:justify-between">
-          <div>
-            <div className="text-xl font-semibold tracking-tight">Integral Battles</div>
-            <div className="text-sm text-zinc-400">
-              Create a room, invite friends, first to 3 correct wins.
-            </div>
-          </div>
-
-          <div className="grid w-full gap-2 md:w-auto md:grid-cols-6">
-            <input
-              className="md:col-span-2 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-zinc-600"
-              placeholder="Room name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-            />
-
-            <div className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm">
-              <div className="text-[11px] text-zinc-400">Difficulty</div>
-              <input
-                className="w-full bg-transparent outline-none"
-                inputMode="numeric"
-                value={difficulty}
-                onChange={(e) => setDifficulty(clampInt(e.target.value, 1, 10, 3))}
-              />
+    <div className="min-h-screen bg-zinc-950 text-zinc-100 selection:bg-indigo-500/30 font-sans">
+      {/* 1. Header & Hero Section */}
+      <div className="relative border-b border-zinc-800 bg-zinc-900/20 pt-10 pb-16">
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,_var(--tw-gradient-stops))] from-indigo-500/10 via-transparent to-transparent" />
+        
+        <div className="relative mx-auto max-w-6xl px-4">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-8">
+            <div>
+              <h1 className="flex items-center gap-3 text-4xl font-extrabold tracking-tight text-white">
+                <Swords className="text-indigo-500" size={36} />
+                Integral Battles
+              </h1>
+              <p className="mt-3 text-zinc-400 max-w-md leading-relaxed">
+                Join a room and prove your calculus speed. First to solve the integrals wins the duel.
+              </p>
             </div>
 
-            <div className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm">
-              <div className="text-[11px] text-zinc-400">Seconds/problem</div>
-              <input
-                className="w-full bg-transparent outline-none"
-                inputMode="numeric"
-                value={secondsPerProblem}
-                onChange={(e) => setSecondsPerProblem(clampInt(e.target.value, 10, 600, 60))}
-              />
+            <div className="flex gap-4">
+              <div className="rounded-2xl bg-zinc-900/50 border border-zinc-800 px-5 py-3 backdrop-blur-sm">
+                <span className="block text-zinc-500 text-[10px] uppercase font-black tracking-widest mb-1">Active Rooms</span>
+                <span className="text-2xl font-bold">{rooms.length}</span>
+              </div>
+              <div className="rounded-2xl bg-zinc-900/50 border border-zinc-800 px-5 py-3 backdrop-blur-sm">
+                <span className="block text-zinc-500 text-[10px] uppercase font-black tracking-widest mb-1">Live Players</span>
+                <span className="text-2xl font-bold text-green-400">
+                  {rooms.reduce((acc, r) => acc + r.playerCount, 0)}
+                </span>
+              </div>
             </div>
-
-            <div className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm">
-              <div className="text-[11px] text-zinc-400">Max players</div>
-              <input
-                className="w-full bg-transparent outline-none"
-                inputMode="numeric"
-                value={maxPlayers}
-                onChange={(e) => setMaxPlayers(clampInt(e.target.value, 2, 50, 2))}
-              />
-            </div>
-
-            <input
-              className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-zinc-600"
-              placeholder="Password (optional)"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-
-            <button
-              className="rounded-lg bg-zinc-100 px-3 py-2 text-sm font-medium text-zinc-950 hover:bg-white disabled:cursor-not-allowed disabled:opacity-60"
-              onClick={createRoom}
-              disabled={creating}
-            >
-              {creating ? 'Creating…' : 'Create'}
-            </button>
-          </div>
-        </div>
-
-        {/* Search + toggles */}
-        <div className="mx-auto flex max-w-6xl flex-col gap-2 px-4 pb-4 md:flex-row md:items-center md:justify-between">
-          <input
-            className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-zinc-600 md:max-w-md"
-            placeholder="Search rooms by name, host, or ID…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-
-          <div className="flex items-center gap-2">
-            <label className="flex items-center gap-2 text-sm text-zinc-300">
-              <input
-                type="checkbox"
-                className="accent-zinc-100"
-                checked={showOpenOnly}
-                onChange={(e) => setShowOpenOnly(e.target.checked)}
-              />
-              Open rooms only
-            </label>
-
-            <button
-              className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm hover:border-zinc-700"
-              onClick={fetchRooms}
-            >
-              Refresh
-            </button>
           </div>
         </div>
       </div>
 
-      {/* Content */}
-      <div className="mx-auto max-w-6xl px-4 py-6">
-        {(actionErr || roomsError) && (
-          <div className="mb-4 rounded-xl border border-red-900/50 bg-red-950/30 px-4 py-3 text-sm text-red-200">
-            {actionErr || roomsError}
-          </div>
-        )}
-        {actionMsg && (
-          <div className="mb-4 rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-3 text-sm text-zinc-200">
-            {actionMsg}
-          </div>
-        )}
+      <div className="mx-auto max-w-6xl px-4 -mt-8">
+        {/* 2. Create Room Toolbar */}
+        <div className="rounded-3xl border border-zinc-800 bg-zinc-900 p-2 shadow-2xl ring-1 ring-white/5">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex-1 min-w-[240px] relative group">
+              <input
+                className="w-full bg-transparent px-5 py-3 text-sm outline-none placeholder:text-zinc-600 border-none focus:ring-0"
+                placeholder="Room Name (e.g. Speed Integration)"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+              />
+              <div className="absolute bottom-1 left-5 right-5 h-[1px] bg-zinc-800 group-focus-within:bg-indigo-500 transition-colors" />
+            </div>
+            
+            <div className="h-10 w-[1px] bg-zinc-800 hidden lg:block" />
 
-        <div className="mb-3 flex items-center justify-between">
-          <div className="text-sm text-zinc-400">
-            {loadingRooms ? 'Loading rooms…' : `${filtered.length} room(s)`}
-          </div>
-        </div>
-
-        <div className="grid gap-3">
-          {filtered.map((room) => (
-            <div
-              key={room.id}
-              className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4"
-            >
-              <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <div className="text-base font-semibold">{room.name}</div>
-                    <span className="rounded-full border border-zinc-700 px-2 py-0.5 text-xs text-zinc-300">
-                      {room.status}
-                    </span>
-                    {room.hasPassword && (
-                      <span className="rounded-full border border-zinc-700 px-2 py-0.5 text-xs text-zinc-300">
-                        🔒
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="mt-1 text-xs text-zinc-400">
-                    Host: <span className="text-zinc-300">{room.hostName}</span> · Room ID:{' '}
-                    <span className="font-mono text-zinc-300">{room.id}</span>
-                  </div>
-
-                  <div className="mt-2 flex flex-wrap gap-2 text-xs">
-                    <span className="rounded-lg border border-zinc-800 bg-zinc-950/40 px-2 py-1 text-zinc-300">
-                      Difficulty: {room.difficulty}
-                    </span>
-                    <span className="rounded-lg border border-zinc-800 bg-zinc-950/40 px-2 py-1 text-zinc-300">
-                      Time: {room.secondsPerProblem}s
-                    </span>
-                    <span className="rounded-lg border border-zinc-800 bg-zinc-950/40 px-2 py-1 text-zinc-300">
-                      Players: {room.playerCount}/{room.maxPlayers}
-                    </span>
-                  </div>
-                </div>
-
+            <div className="flex items-center gap-4 px-4 overflow-x-auto no-scrollbar">
+              <div className="flex flex-col">
+                <span className="text-[9px] uppercase text-zinc-500 font-bold mb-1">Difficulty</span>
                 <div className="flex items-center gap-2">
-                  <button
-                    className="rounded-lg border border-zinc-700 bg-zinc-950/30 px-3 py-2 text-sm hover:border-zinc-500 disabled:cursor-not-allowed disabled:opacity-50"
-                    onClick={() => joinRoom(room.id, room.hasPassword)}
-                    disabled={room.status !== 'lobby' || room.playerCount >= room.maxPlayers}
-                  >
-                    Join
-                  </button>
+                  <Shield size={14} className="text-indigo-400" />
+                  <input
+                    className="w-8 bg-transparent text-sm font-bold outline-none"
+                    value={difficulty}
+                    onChange={(e) => setDifficulty(clampInt(e.target.value, 1, 10, 3))}
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-col border-l border-zinc-800 pl-4">
+                <span className="text-[9px] uppercase text-zinc-500 font-bold mb-1">Time (s)</span>
+                <div className="flex items-center gap-2">
+                  <Clock size={14} className="text-amber-400" />
+                  <input
+                    className="w-10 bg-transparent text-sm font-bold outline-none"
+                    value={secondsPerProblem}
+                    onChange={(e) => setSecondsPerProblem(clampInt(e.target.value, 10, 600, 60))}
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-col border-l border-zinc-800 pl-4">
+                <span className="text-[9px] uppercase text-zinc-500 font-bold mb-1">Max Players</span>
+                <div className="flex items-center gap-2">
+                  <Users size={14} className="text-blue-400" />
+                  <input
+                    className="w-8 bg-transparent text-sm font-bold outline-none"
+                    value={maxPlayers}
+                    onChange={(e) => setMaxPlayers(clampInt(e.target.value, 2, 50, 2))}
+                  />
                 </div>
               </div>
             </div>
-          ))}
 
-          {!loadingRooms && filtered.length === 0 && (
-            <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-8 text-center text-sm text-zinc-400">
-              No rooms found. Create one above.
+            <button
+              onClick={createRoom}
+              disabled={creating}
+              className="ml-auto flex items-center gap-2 rounded-2xl bg-indigo-600 px-8 py-3.5 text-sm font-bold text-white transition-all hover:bg-indigo-500 hover:shadow-[0_0_20px_rgba(79,70,229,0.4)] active:scale-95 disabled:opacity-50"
+            >
+              {creating ? <RefreshCw className="animate-spin" size={18} /> : <Plus size={18} />}
+              Create Duel
+            </button>
+          </div>
+        </div>
+
+        {/* 3. Error Handling */}
+        {(actionErr || roomsError) && (
+          <div className="mt-6 rounded-2xl border border-red-900/50 bg-red-950/20 px-4 py-3 text-sm text-red-300 flex items-center gap-3">
+            <span className="h-2 w-2 rounded-full bg-red-500 animate-pulse" />
+            {actionErr || roomsError}
+          </div>
+        )}
+
+        {/* 4. Main Content Area */}
+        <div className="mt-10 grid grid-cols-1 lg:grid-cols-4 gap-10">
+          
+          {/* Sidebar */}
+          <div className="space-y-8">
+            <section>
+              <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-500 mb-4">Find Battle</h3>
+              <div className="relative group">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-600 group-focus-within:text-indigo-400 transition-colors" size={18} />
+                <input
+                  className="w-full rounded-xl border border-zinc-800 bg-zinc-900/50 py-3 pl-10 pr-4 text-sm outline-none focus:border-indigo-500/50 transition-all focus:bg-zinc-900"
+                  placeholder="ID or Host Name..."
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+              </div>
+            </section>
+
+            <section className="pt-6 border-t border-zinc-900">
+              <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-500 mb-4">Filters</h3>
+              <label className="flex cursor-pointer items-center justify-between group rounded-xl border border-zinc-800 p-3 hover:bg-zinc-900 transition-colors">
+                <span className="text-sm text-zinc-400 group-hover:text-zinc-200">Open Duels Only</span>
+                <div className={`relative h-5 w-9 rounded-full transition-colors ${showOpenOnly ? 'bg-indigo-600' : 'bg-zinc-700'}`}>
+                  <div className={`absolute top-1 h-3 w-3 rounded-full bg-white transition-all ${showOpenOnly ? 'left-5' : 'left-1'}`} />
+                </div>
+                <input
+                  type="checkbox"
+                  className="hidden"
+                  checked={showOpenOnly}
+                  onChange={(e) => setShowOpenOnly(e.target.checked)}
+                />
+              </label>
+            </section>
+          </div>
+
+          {/* Room List Grid */}
+          <div className="lg:col-span-3">
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-sm font-bold text-zinc-500 tracking-wide uppercase">
+                Browse <span className="text-white">{filtered.length}</span> results
+              </h2>
+              <button onClick={fetchRooms} className="p-2 text-zinc-500 hover:text-white transition-colors bg-zinc-900 rounded-lg border border-zinc-800">
+                <RefreshCw size={16} className={loadingRooms ? 'animate-spin' : ''} />
+              </button>
             </div>
-          )}
+
+            <div className="space-y-4">
+              {filtered.map((room) => (
+                <div
+                  key={room.id}
+                  className="group relative overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900/40 p-6 transition-all hover:border-zinc-600 hover:bg-zinc-900/80 hover:shadow-xl shadow-black/40"
+                >
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-3">
+                        <span className="text-xl font-bold text-white group-hover:text-indigo-400 transition-colors">
+                          {room.name}
+                        </span>
+                        <span className={`px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-tighter ${
+                          room.status === 'lobby' ? 'bg-green-500/10 text-green-500 border border-green-500/20' : 'bg-amber-500/10 text-amber-500 border border-amber-500/20'
+                        }`}>
+                          {room.status === 'lobby' ? 'Open' : 'Running'}
+                        </span>
+                        {room.hasPassword && <Lock size={16} className="text-zinc-600" />}
+                      </div>
+                      
+                      <div className="flex items-center gap-4 text-xs">
+                        <div className="flex items-center gap-1.5 text-zinc-400">
+                          <Trophy size={12} className="text-zinc-500" />
+                          Host: <span className="text-zinc-200 font-medium">{room.hostName}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5 text-zinc-400">
+                          <Hash size={12} className="text-zinc-500" />
+                          <span className="font-mono text-zinc-500">{room.id.slice(0, 8)}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-6">
+                      <div className="grid grid-cols-3 gap-8 pr-6 border-r border-zinc-800">
+                         <div className="text-center">
+                            <span className="block text-[9px] uppercase text-zinc-600 font-bold mb-1">Difficulty</span>
+                            <span className="text-sm font-mono text-indigo-300 tracking-widest">{room.difficulty}</span>
+                         </div>
+                         <div className="text-center">
+                            <span className="block text-[9px] uppercase text-zinc-600 font-bold mb-1">Limit</span>
+                            <span className="text-sm font-mono text-amber-300 tracking-widest">{room.secondsPerProblem}s</span>
+                         </div>
+                         <div className="text-center">
+                            <span className="block text-[9px] uppercase text-zinc-600 font-bold mb-1">Players</span>
+                            <span className={`text-sm font-mono tracking-widest ${room.playerCount >= room.maxPlayers ? 'text-zinc-500' : 'text-green-400'}`}>
+                              {room.playerCount}/{room.maxPlayers}
+                            </span>
+                         </div>
+                      </div>
+
+                      <button
+                        onClick={() => joinRoom(room.id, room.hasPassword)}
+                        disabled={room.status !== 'lobby' || room.playerCount >= room.maxPlayers}
+                        className="rounded-xl bg-zinc-100 px-8 py-3 text-sm font-black text-zinc-950 transition-all hover:bg-white hover:shadow-[0_0_20px_rgba(255,255,255,0.15)] disabled:opacity-10 disabled:grayscale active:scale-95"
+                      >
+                        JOIN
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+
+              {!loadingRooms && filtered.length === 0 && (
+                <div className="rounded-3xl border border-dashed border-zinc-800 bg-zinc-900/20 p-20 text-center">
+                  <Swords size={48} className="mx-auto text-zinc-800 mb-4" />
+                  <p className="text-zinc-500 text-sm">No battles match your search criteria.</p>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       </div>
     </div>
