@@ -46,19 +46,22 @@ export const authOptions: NextAuthOptions = {
   session: {
     strategy: "jwt",
   },
-  // 👇 THIS IS THE NEW PART THAT FIXES THE NAVBAR
   callbacks: {
     async session({ session, token }) {
+      // Add user ID to session
+      if (token?.sub) {
+        (session.user as any).id = token.sub;
+      }
+
       if (session?.user?.email) {
-        // Every time the session is checked, grab the LATEST image from the DB
-        // This ensures the Navbar updates immediately after you save.
         try {
           const result = await pool.query(
-            "SELECT name, image FROM users WHERE email = $1", 
+            "SELECT id, name, image FROM users WHERE email = $1", 
             [session.user.email]
           );
           
           if (result.rows[0]) {
+            (session.user as any).id = result.rows[0].id;
             session.user.name = result.rows[0].name;
             session.user.image = result.rows[0].image;
           }
@@ -69,15 +72,43 @@ export const authOptions: NextAuthOptions = {
       return session;
     },
     async jwt({ token, user, trigger, session }) {
-      // Allow client-side updates (like your save() function) to update the token immediately
+      // Store user ID in token on initial sign in
+      if (user) {
+        token.sub = String(user.id);
+      }
+
+      // Allow client-side updates
       if (trigger === "update" && session) {
         return { ...token, ...session.user };
       }
-      // Initial sign in
-      if (user) {
-        return { ...token, ...user };
-      }
+
       return token;
+    },
+    async signIn({ user, account, profile }) {
+      // For Google OAuth, ensure user exists in database
+      if (account?.provider === "google" && user.email) {
+        try {
+          const existing = await pool.query(
+            "SELECT id FROM users WHERE email = $1",
+            [user.email]
+          );
+
+          if (existing.rows.length === 0) {
+            // Create user if doesn't exist
+            const newUser = await pool.query(
+              "INSERT INTO users (email, name, image, is_public) VALUES ($1, $2, $3, true) RETURNING id",
+              [user.email, user.name || "New User", user.image || null]
+            );
+            user.id = newUser.rows[0].id;
+          } else {
+            user.id = existing.rows[0].id;
+          }
+        } catch (error) {
+          console.error("Sign in error:", error);
+          return false;
+        }
+      }
+      return true;
     }
   },
   secret: process.env.NEXTAUTH_SECRET,

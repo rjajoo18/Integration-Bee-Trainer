@@ -206,4 +206,11 @@ export default function MatchClient({ matchId }: { matchId: string }) {
             </div>
 
             <div className="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/30 p-3 text-xs text-zinc-400">
-              Difficulty bu
+              Difficulty built into problem generation
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
