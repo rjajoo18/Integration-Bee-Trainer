@@ -158,10 +158,6 @@ export default function BattleLobbyPage() {
                 <Swords className="text-indigo-500" size={36} />
                 Integral Battles
               </h1>
-              <p className="mt-3 text-zinc-400 max-w-md leading-relaxed">
-                Join a room and prove your calculus speed. First to solve the
-                integrals wins the duel.
-              </p>
             </div>
 
             <div className="flex gap-4">

@@ -33,7 +33,14 @@ export async function POST(_: Request, ctx: { params: Promise<{ roomId: string }
       userId,
     ]);
 
-    if (room.host_user_id === userId && room.status === "lobby") {
+    // Prevent deleting the room if a match already exists (race with start)
+    const matchExistsRes = await client.query(
+      `SELECT 1 FROM battle_matches WHERE room_id = $1 LIMIT 1`,
+      [roomId]
+    );
+    const matchExists = matchExistsRes.rows.length > 0;
+
+    if (room.host_user_id === userId && room.status === "lobby" && !matchExists) {
       await client.query(`DELETE FROM battle_rooms WHERE id=$1`, [roomId]);
       await client.query("COMMIT");
       return NextResponse.json({ ok: true, closed: true });

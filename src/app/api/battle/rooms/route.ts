@@ -27,6 +27,7 @@ export async function GET() {
         FROM battle_room_players
         GROUP BY room_id
       ) p ON p.room_id = r.id
+      WHERE r.status = 'lobby'
       ORDER BY r.created_at DESC
       LIMIT 200
     `;
@@ -41,7 +42,7 @@ export async function GET() {
       playerCount: row.player_count,
       hasPassword: row.has_password,
       status: row.status,
-      hostName: row.host_user_id, // replace with username lookup if you have it
+      hostUserId: row.host_user_id,
       createdAt: row.created_at,
     }));
 
@@ -72,13 +73,13 @@ export async function POST(req: Request) {
     const password = body.password ? String(body.password) : null;
 
     if (!Number.isFinite(difficulty) || difficulty < 1 || difficulty > 10) {
-      return NextResponse.json({ error: "Invalid difficulty" }, { status: 400 });
+      return NextResponse.json({ error: "Invalid difficulty (1-10)" }, { status: 400 });
     }
     if (!Number.isFinite(secondsPerProblem) || secondsPerProblem < 10 || secondsPerProblem > 600) {
-      return NextResponse.json({ error: "Invalid secondsPerProblem" }, { status: 400 });
+      return NextResponse.json({ error: "Invalid secondsPerProblem (10-600)" }, { status: 400 });
     }
     if (!Number.isFinite(maxPlayers) || maxPlayers < 2 || maxPlayers > 50) {
-      return NextResponse.json({ error: "Invalid maxPlayers" }, { status: 400 });
+      return NextResponse.json({ error: "Invalid maxPlayers (2-50)" }, { status: 400 });
     }
 
     const passwordHash = password ? await hashPassword(password) : null;
@@ -98,9 +99,9 @@ export async function POST(req: Request) {
 
       const room = ins.rows[0];
 
-      // Host auto-joins room
+      // Host auto-joins room with ready status
       await client.query(
-        `INSERT INTO battle_room_players (room_id, user_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
+        `INSERT INTO battle_room_players (room_id, user_id, is_ready) VALUES ($1,$2,true) ON CONFLICT DO NOTHING`,
         [room.id, userId]
       );
 
@@ -116,7 +117,7 @@ export async function POST(req: Request) {
           playerCount: 1,
           hasPassword: room.has_password,
           status: room.status,
-          hostName: room.host_user_id,
+          hostUserId: room.host_user_id,
           createdAt: room.created_at,
         },
       });
@@ -127,6 +128,7 @@ export async function POST(req: Request) {
       client.release();
     }
   } catch (e: any) {
+    console.error("Room creation error:", e);
     return NextResponse.json({ error: e?.message ?? "Failed to create room" }, { status: 500 });
   }
 }
