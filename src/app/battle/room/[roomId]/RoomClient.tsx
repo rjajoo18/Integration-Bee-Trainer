@@ -1,166 +1,169 @@
-'use client';
+// src/app/battle/room/[roomId]/RoomClient.tsx
+"use client";
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState } from "react";
+import { ArrowLeft, Lock, RefreshCw, Users } from "lucide-react";
 
-type RoomState = {
-  room: {
-    id: string;
-    name: string;
-    difficulty: number;
-    secondsPerProblem: number;
-    maxPlayers: number;
-    hasPassword: boolean;
-    status: 'lobby' | 'in_game' | 'finished';
-    hostUserId: number;
-    createdAt: string;
-  };
-  players: { userId: number; joinedAt: string }[];
+type Room = {
+  id: string;
+  name: string;
+  difficulty: number;
+  secondsPerProblem: number;
+  maxPlayers: number;
+  playerCount: number;
+  hasPassword: boolean;
+  status: "lobby" | "in_game" | "finished";
+  hostName: string;
+  createdAt: string;
 };
 
-export default function RoomClient({ roomId }: { roomId: string }) {
-  const [state, setState] = useState<RoomState | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [joining, setJoining] = useState(true);
-  const [starting, setStarting] = useState(false);
+type Props = {
+  roomId: string;
+};
 
-  async function load() {
-    const r = await fetch(`/api/battle/rooms/${roomId}`, { cache: 'no-store' });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j?.error ?? 'Failed to load room');
-    setState(j);
+export default function RoomClient({ roomId }: Props) {
+  const [room, setRoom] = useState<Room | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function fetchRoom() {
+    setErr(null);
+    setLoading(true);
+    try {
+      // IMPORTANT: this endpoint must exist. If yours is different, update it here.
+      const r = await fetch(`/api/battle/rooms/${roomId}`, { cache: "no-store" });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j?.error ?? "Failed to load room");
+      setRoom(j.room ?? j); // supports either {room: {...}} or direct room object
+    } catch (e: any) {
+      setErr(e?.message ?? "Failed to load room");
+      setRoom(null);
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
-    let alive = true;
-
-    async function joinThenPoll() {
-      setErr(null);
-      try {
-        await fetch(`/api/battle/rooms/${roomId}/join`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password: null }),
-        });
-
-        if (!alive) return;
-        setJoining(false);
-
-        await load();
-        const t = setInterval(() => {
-          load().catch(() => {});
-        }, 1500);
-
-        return () => clearInterval(t);
-      } catch (e: any) {
-        if (!alive) return;
-        setErr(e?.message ?? 'Failed to join room');
-        setJoining(false);
-      }
-    }
-
-    joinThenPoll();
-
-    return () => {
-      alive = false;
-      fetch(`/api/battle/rooms/${roomId}/leave`, { method: 'POST' }).catch(() => {});
-    };
+    fetchRoom();
+    const t = setInterval(fetchRoom, 3000);
+    return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomId]);
 
-  const playerCount = state?.players?.length ?? 0;
-
-  async function startMatch() {
-    setStarting(true);
-    setErr(null);
-    try {
-      const r = await fetch(`/api/battle/rooms/${roomId}/start`, { method: 'POST' });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j?.error ?? 'Failed to start');
-      window.location.href = `/battle/match/${j.matchId}`;
-    } catch (e: any) {
-      setErr(e?.message ?? 'Failed to start match');
-    } finally {
-      setStarting(false);
-    }
-  }
-
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
-      <div className="mx-auto max-w-4xl px-4 py-6">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <div className="text-xl font-semibold">{state?.room?.name ?? 'Room'}</div>
-            <div className="mt-1 text-sm text-zinc-400">
-              Room ID: <span className="font-mono text-zinc-300">{roomId}</span>
+      <div className="border-b border-zinc-800 bg-zinc-900/30">
+        <div className="mx-auto max-w-4xl px-4 py-6 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => (window.location.href = "/battle")}
+              className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-2 text-sm text-zinc-300 hover:text-white hover:bg-zinc-900 transition"
+            >
+              <span className="flex items-center gap-2">
+                <ArrowLeft size={16} />
+                Back
+              </span>
+            </button>
+
+            <div>
+              <div className="text-xs uppercase tracking-widest text-zinc-500 font-black">
+                Room
+              </div>
+              <div className="text-lg font-bold text-white font-mono">
+                {roomId.slice(0, 8)}
+              </div>
             </div>
           </div>
+
           <button
-            className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm hover:border-zinc-700"
-            onClick={() => (window.location.href = '/battle')}
+            type="button"
+            onClick={fetchRoom}
+            className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-2 text-sm text-zinc-300 hover:text-white hover:bg-zinc-900 transition"
           >
-            Back to Lobby
+            <span className="flex items-center gap-2">
+              <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
+              Refresh
+            </span>
           </button>
         </div>
+      </div>
 
+      <div className="mx-auto max-w-4xl px-4 py-8">
         {err && (
-          <div className="mt-4 rounded-xl border border-red-900/50 bg-red-950/30 px-4 py-3 text-sm text-red-200">
+          <div className="mb-6 rounded-2xl border border-red-900/50 bg-red-950/20 px-4 py-3 text-sm text-red-300 flex items-center gap-3">
+            <span className="h-2 w-2 rounded-full bg-red-500 animate-pulse" />
             {err}
           </div>
         )}
 
-        <div className="mt-6 grid gap-3 rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4">
-          <div className="flex flex-wrap gap-2 text-xs">
-            <span className="rounded-lg border border-zinc-800 bg-zinc-950/40 px-2 py-1 text-zinc-300">
-              Difficulty: {state?.room?.difficulty ?? '—'}
-            </span>
-            <span className="rounded-lg border border-zinc-800 bg-zinc-950/40 px-2 py-1 text-zinc-300">
-              Time: {state?.room?.secondsPerProblem ?? '—'}s
-            </span>
-            <span className="rounded-lg border border-zinc-800 bg-zinc-950/40 px-2 py-1 text-zinc-300">
-              Players: {playerCount}/{state?.room?.maxPlayers ?? '—'}
-            </span>
-            <span className="rounded-lg border border-zinc-800 bg-zinc-950/40 px-2 py-1 text-zinc-300">
-              Status: {state?.room?.status ?? '—'}
-            </span>
+        {loading && !room && (
+          <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-6 text-zinc-400">
+            Loading room…
           </div>
+        )}
 
-          <div className="mt-2">
-            <div className="text-sm font-medium">Players</div>
-            <div className="mt-2 grid gap-2">
-              {(state?.players ?? []).map((p) => (
-                <div key={p.userId} className="rounded-xl border border-zinc-800 bg-zinc-950/30 px-3 py-2">
-                  <div className="text-sm text-zinc-200">{p.userId}</div>
-                  <div className="text-xs text-zinc-500">
-                    Joined: {new Date(p.joinedAt).toLocaleString()}
-                  </div>
+        {!loading && room && (
+          <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-6">
+            <div className="flex items-start justify-between gap-6">
+              <div>
+                <div className="text-2xl font-extrabold text-white">
+                  {room.name}
                 </div>
-              ))}
-              {state && state.players.length === 0 && (
-                <div className="text-sm text-zinc-400">No players yet.</div>
-              )}
+                <div className="mt-2 text-sm text-zinc-400">
+                  Host: <span className="text-zinc-200">{room.hostName}</span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3">
+                {room.hasPassword && (
+                  <span className="inline-flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-2 text-xs text-zinc-300">
+                    <Lock size={14} />
+                    Protected
+                  </span>
+                )}
+                <span className="inline-flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-2 text-xs text-zinc-300">
+                  <Users size={14} />
+                  {room.playerCount}/{room.maxPlayers}
+                </span>
+              </div>
+            </div>
+
+            <div className="mt-6 grid grid-cols-3 gap-4">
+              <div className="rounded-xl border border-zinc-800 bg-zinc-950/30 p-4">
+                <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-black">
+                  Difficulty
+                </div>
+                <div className="mt-1 font-mono text-lg text-indigo-300">
+                  {room.difficulty}
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-zinc-800 bg-zinc-950/30 p-4">
+                <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-black">
+                  Time Limit
+                </div>
+                <div className="mt-1 font-mono text-lg text-amber-300">
+                  {room.secondsPerProblem}s
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-zinc-800 bg-zinc-950/30 p-4">
+                <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-black">
+                  Status
+                </div>
+                <div className="mt-1 font-mono text-lg text-zinc-200">
+                  {room.status}
+                </div>
+              </div>
+            </div>
+
+            {/* TODO: put your actual in-room lobby/game UI here */}
+            <div className="mt-6 rounded-xl border border-dashed border-zinc-800 bg-zinc-950/20 p-6 text-sm text-zinc-500">
+              This is the room page. Add “ready up”, player list, start match, etc.
             </div>
           </div>
-
-          <div className="mt-2 flex items-center justify-between gap-3">
-            <button
-              className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm hover:border-zinc-700"
-              onClick={async () => {
-                await fetch(`/api/battle/rooms/${roomId}/leave`, { method: 'POST' }).catch(() => {});
-                window.location.href = '/battle';
-              }}
-            >
-              Leave Room
-            </button>
-
-            <button
-              className="rounded-lg bg-zinc-100 px-4 py-2 text-sm font-medium text-zinc-950 hover:bg-white disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={joining || starting || !state || state.room.status !== 'lobby' || playerCount < 2}
-              onClick={startMatch}
-            >
-              {starting ? 'Starting…' : 'Start Match'}
-            </button>
-          </div>
-        </div>
+        )}
       </div>
     </div>
   );

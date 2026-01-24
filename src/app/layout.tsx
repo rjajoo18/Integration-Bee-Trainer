@@ -1,41 +1,26 @@
-import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+// src/app/layout.tsx
 import "./globals.css";
-import "katex/dist/katex.min.css";
+import Providers from "./providers";
 
-// 👇 Importing the file created in the previous step
-import { Providers } from "./providers"; 
-import Navbar from "@/components/Navbar";
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
-
-export const metadata: Metadata = {
-  title: "IBT", // 👈 Changed to "IBT" as requested
-  description: "The ultimate trainer for competitive mathematics.",
-};
+// ✅ adjust this import path to your project
+import Navbar from "@/components/Navbar"; // or: import Navbar from "./components/Navbar";
 
 export default function RootLayout({
   children,
-}: Readonly<{
+}: {
   children: React.ReactNode;
-}>) {
+}) {
   return (
-    <html lang="en" className="dark">
-      <body className={`${geistSans.variable} ${geistMono.variable} antialiased bg-[#0d1117] text-white`}>
+    <html lang="en">
+      <body className="min-h-screen bg-background text-foreground">
         <Providers>
-          {/* Navbar must be inside Providers to access Session data */}
-          <Navbar />
-          <main className="min-h-screen pt-16">
-            {children}
-          </main>
+          {/* Navbar */}
+          <header className="sticky top-0 z-50">
+            <Navbar />
+          </header>
+
+          {/* Page content */}
+          <main className="min-h-[calc(100vh-64px)]">{children}</main>
         </Providers>
       </body>
     </html>
