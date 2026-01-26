@@ -73,18 +73,23 @@ export async function POST(_: Request, ctx: { params: Promise<{ roomId: string }
       );
     }
 
-    await client.query(`UPDATE battle_rooms SET status='in_game' WHERE id=$1`, [roomId]);
+    // Update room with match ID and status
+    await client.query(
+      `UPDATE battle_rooms SET status='in_game', current_match_id=$2 WHERE id=$1`,
+      [roomId, matchId]
+    );
 
-    // Initialize first problem
+    // Initialize first problem (handle "All" difficulty)
+    const difficultyParam = room.difficulty;
     const problemRes = await client.query(
       `
-      SELECT p.id, p.latex_question, p.rating
-      FROM problems p
-      WHERE p.rating = $1
+      SELECT p.id, p.problem_text, p.difficulty
+      FROM integration_problems p
+      WHERE ($1::int IS NULL OR p.difficulty = $1)
       ORDER BY random()
       LIMIT 1
       `,
-      [room.difficulty]
+      [difficultyParam]
     );
 
     if (problemRes.rows.length > 0) {

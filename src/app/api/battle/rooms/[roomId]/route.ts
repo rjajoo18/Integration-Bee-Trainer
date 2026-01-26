@@ -12,8 +12,17 @@ export async function GET(_: Request, ctx: { params: Promise<{ roomId: string }>
 
     const roomRes = await pool.query(
       `
-      SELECT id, name, difficulty, seconds_per_problem, max_players,
-             (password_hash IS NOT NULL) AS has_password, status, created_at, host_user_id
+      SELECT
+        id,
+        name,
+        difficulty,
+        seconds_per_problem,
+        max_players,
+        (password_hash IS NOT NULL) AS has_password,
+        status,
+        created_at,
+        host_user_id,
+        current_match_id
       FROM battle_rooms
       WHERE id = $1
       `,
@@ -34,17 +43,20 @@ export async function GET(_: Request, ctx: { params: Promise<{ roomId: string }>
       [roomId]
     );
 
+    const r0 = roomRes.rows[0];
+
     return NextResponse.json({
       room: {
-        id: roomRes.rows[0].id,
-        name: roomRes.rows[0].name,
-        difficulty: roomRes.rows[0].difficulty,
-        secondsPerProblem: roomRes.rows[0].seconds_per_problem,
-        maxPlayers: roomRes.rows[0].max_players,
-        hasPassword: roomRes.rows[0].has_password,
-        status: roomRes.rows[0].status,
-        createdAt: roomRes.rows[0].created_at,
-        hostUserId: roomRes.rows[0].host_user_id,
+        id: r0.id,
+        name: r0.name,
+        difficulty: r0.difficulty, // null => All
+        secondsPerProblem: r0.seconds_per_problem,
+        maxPlayers: r0.max_players,
+        hasPassword: r0.has_password,
+        status: r0.status,
+        createdAt: r0.created_at,
+        hostUserId: r0.host_user_id,
+        currentMatchId: r0.current_match_id,
       },
       players: playersRes.rows.map((p) => ({
         userId: p.user_id,
@@ -71,7 +83,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ roomId: strin
   const { roomId } = await ctx.params;
 
   try {
-    const body = await req.json();
+    const body = await req.json().catch(() => ({}));
 
     const client = await pool.connect();
     try {
@@ -87,7 +99,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ roomId: strin
         return NextResponse.json({ error: "Room not found" }, { status: 404 });
       }
 
-      const room = roomRes.rows[0];
+      const room = roomRes.rows[0] as { host_user_id: number; status: string };
 
       if (room.host_user_id !== userId) {
         await client.query("ROLLBACK");
@@ -96,7 +108,10 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ roomId: strin
 
       if (room.status !== "lobby") {
         await client.query("ROLLBACK");
-        return NextResponse.json({ error: "Cannot update settings after match starts" }, { status: 400 });
+        return NextResponse.json(
+          { error: "Cannot update settings after match starts" },
+          { status: 400 }
+        );
       }
 
       const updates: string[] = [];
@@ -109,11 +124,23 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ roomId: strin
       }
 
       if (body.difficulty !== undefined) {
-        const diff = Number(body.difficulty);
-        if (!Number.isFinite(diff) || diff < 1 || diff > 10) {
-          await client.query("ROLLBACK");
-          return NextResponse.json({ error: "Invalid difficulty (1-10)" }, { status: 400 });
+        let diff: number | null | string = body.difficulty;
+
+        // allow "all" => NULL
+        if (diff === "all" || diff === "All" || diff === null) {
+          diff = null;
+        } else {
+          const d = Number(diff);
+          if (!Number.isFinite(d) || d < 1 || d > 5) {
+            await client.query("ROLLBACK");
+            return NextResponse.json(
+              { error: "Invalid difficulty (1-5 or 'All')" },
+              { status: 400 }
+            );
+          }
+          diff = d;
         }
+
         updates.push(`difficulty = $${paramIdx++}`);
         values.push(diff);
       }
@@ -122,7 +149,10 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ roomId: strin
         const secs = Number(body.secondsPerProblem);
         if (!Number.isFinite(secs) || secs < 10 || secs > 600) {
           await client.query("ROLLBACK");
-          return NextResponse.json({ error: "Invalid secondsPerProblem (10-600)" }, { status: 400 });
+          return NextResponse.json(
+            { error: "Invalid secondsPerProblem (10-600)" },
+            { status: 400 }
+          );
         }
         updates.push(`seconds_per_problem = $${paramIdx++}`);
         values.push(secs);
@@ -130,9 +160,9 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ roomId: strin
 
       if (body.maxPlayers !== undefined) {
         const max = Number(body.maxPlayers);
-        if (!Number.isFinite(max) || max < 2 || max > 50) {
+        if (!Number.isFinite(max) || max < 2 || max > 20) {
           await client.query("ROLLBACK");
-          return NextResponse.json({ error: "Invalid maxPlayers (2-50)" }, { status: 400 });
+          return NextResponse.json({ error: "Invalid maxPlayers (2-20)" }, { status: 400 });
         }
         updates.push(`max_players = $${paramIdx++}`);
         values.push(max);
@@ -151,17 +181,29 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ roomId: strin
       }
 
       values.push(roomId);
+
       const updateQuery = `
         UPDATE battle_rooms
         SET ${updates.join(", ")}
         WHERE id = $${paramIdx}
-        RETURNING id, name, difficulty, seconds_per_problem, max_players, (password_hash IS NOT NULL) AS has_password, status, created_at, host_user_id
+        RETURNING
+          id,
+          name,
+          difficulty,
+          seconds_per_problem,
+          max_players,
+          (password_hash IS NOT NULL) AS has_password,
+          status,
+          created_at,
+          host_user_id,
+          current_match_id
       `;
 
       const result = await client.query(updateQuery, values);
       await client.query("COMMIT");
 
       const updated = result.rows[0];
+
       return NextResponse.json({
         room: {
           id: updated.id,
@@ -173,6 +215,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ roomId: strin
           status: updated.status,
           createdAt: updated.created_at,
           hostUserId: updated.host_user_id,
+          currentMatchId: updated.current_match_id,
         },
       });
     } catch (e) {

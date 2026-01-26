@@ -31,12 +31,13 @@ export async function GET() {
       ORDER BY r.created_at DESC
       LIMIT 200
     `;
+
     const result = await pool.query(q);
 
     const rooms = result.rows.map((row) => ({
       id: row.id,
       name: row.name,
-      difficulty: row.difficulty,
+      difficulty: row.difficulty, // null => "All" on the client
       secondsPerProblem: row.seconds_per_problem,
       maxPlayers: row.max_players,
       playerCount: row.player_count,
@@ -64,22 +65,45 @@ export async function POST(req: Request) {
   }
 
   try {
-    const body = await req.json();
+    const body = await req.json().catch(() => ({}));
 
     const name = String(body.name ?? "Integral Duel").slice(0, 80);
-    const difficulty = Number(body.difficulty);
+
+    // difficulty: 1-5 or "all"/"All"/null
+    let difficultyRaw = body.difficulty;
+    let difficulty: number | null = null;
+
+    if (
+      difficultyRaw === null ||
+      difficultyRaw === undefined ||
+      difficultyRaw === "all" ||
+      difficultyRaw === "All"
+    ) {
+      difficulty = null; // NULL means "All"
+    } else {
+      const d = Number(difficultyRaw);
+      if (!Number.isFinite(d) || d < 1 || d > 5) {
+        return NextResponse.json(
+          { error: "Invalid difficulty (1-5 or 'All')" },
+          { status: 400 }
+        );
+      }
+      difficulty = d;
+    }
+
     const secondsPerProblem = Number(body.secondsPerProblem);
     const maxPlayers = Number(body.maxPlayers);
     const password = body.password ? String(body.password) : null;
 
-    if (!Number.isFinite(difficulty) || difficulty < 1 || difficulty > 10) {
-      return NextResponse.json({ error: "Invalid difficulty (1-10)" }, { status: 400 });
-    }
     if (!Number.isFinite(secondsPerProblem) || secondsPerProblem < 10 || secondsPerProblem > 600) {
-      return NextResponse.json({ error: "Invalid secondsPerProblem (10-600)" }, { status: 400 });
+      return NextResponse.json(
+        { error: "Invalid secondsPerProblem (10-600)" },
+        { status: 400 }
+      );
     }
-    if (!Number.isFinite(maxPlayers) || maxPlayers < 2 || maxPlayers > 50) {
-      return NextResponse.json({ error: "Invalid maxPlayers (2-50)" }, { status: 400 });
+
+    if (!Number.isFinite(maxPlayers) || maxPlayers < 2 || maxPlayers > 20) {
+      return NextResponse.json({ error: "Invalid maxPlayers (2-20)" }, { status: 400 });
     }
 
     const passwordHash = password ? await hashPassword(password) : null;
@@ -90,18 +114,38 @@ export async function POST(req: Request) {
 
       const ins = await client.query(
         `
-        INSERT INTO battle_rooms (host_user_id, name, difficulty, seconds_per_problem, max_players, password_hash, status)
+        INSERT INTO battle_rooms (
+          host_user_id,
+          name,
+          difficulty,
+          seconds_per_problem,
+          max_players,
+          password_hash,
+          status
+        )
         VALUES ($1,$2,$3,$4,$5,$6,'lobby')
-        RETURNING id, name, difficulty, seconds_per_problem, max_players, (password_hash IS NOT NULL) AS has_password, status, created_at, host_user_id
+        RETURNING
+          id,
+          name,
+          difficulty,
+          seconds_per_problem,
+          max_players,
+          (password_hash IS NOT NULL) AS has_password,
+          status,
+          created_at,
+          host_user_id
         `,
         [userId, name, difficulty, secondsPerProblem, maxPlayers, passwordHash]
       );
 
       const room = ins.rows[0];
 
-      // Host auto-joins room with ready status
       await client.query(
-        `INSERT INTO battle_room_players (room_id, user_id, is_ready) VALUES ($1,$2,true) ON CONFLICT DO NOTHING`,
+        `
+        INSERT INTO battle_room_players (room_id, user_id, is_ready)
+        VALUES ($1,$2,true)
+        ON CONFLICT DO NOTHING
+        `,
         [room.id, userId]
       );
 
@@ -111,7 +155,7 @@ export async function POST(req: Request) {
         room: {
           id: room.id,
           name: room.name,
-          difficulty: room.difficulty,
+          difficulty: room.difficulty, // null => "All"
           secondsPerProblem: room.seconds_per_problem,
           maxPlayers: room.max_players,
           playerCount: 1,

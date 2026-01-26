@@ -20,7 +20,8 @@ export async function POST(_: Request, ctx: { params: Promise<{ matchId: string 
 
     const matchRes = await client.query(
       `
-      SELECT m.id, m.room_id, m.status, r.host_user_id, r.difficulty, r.seconds_per_problem
+      SELECT m.id, m.room_id, m.status,
+             r.host_user_id, r.difficulty, r.seconds_per_problem
       FROM battle_matches m
       JOIN battle_rooms r ON r.id = m.room_id
       WHERE m.id = $1
@@ -37,7 +38,7 @@ export async function POST(_: Request, ctx: { params: Promise<{ matchId: string 
     const m = matchRes.rows[0] as {
       status: string;
       host_user_id: number;
-      difficulty: number;
+      difficulty: number | null; // NULL => All
       seconds_per_problem: number;
     };
 
@@ -56,14 +57,24 @@ export async function POST(_: Request, ctx: { params: Promise<{ matchId: string 
     );
     const nextRoundIdx = Number(lastRound.rows[0].mx) + 1;
 
+    // Pick a new unused problem within THIS match.
+    // Uses integration_problems + difficulty 1-5 (or NULL = all 1-5).
     const problemRes = await client.query(
       `
-      SELECT p.id, p.latex_question, p.rating
-      FROM problems p
-      WHERE p.rating = $1
+      SELECT
+        p.id,
+        p.problem_text,
+        p.problem_answer_latex,
+        p.problem_answer_computed,
+        p.difficulty
+      FROM integration_problems p
+      WHERE p.difficulty BETWEEN 1 AND 5
+        AND ($1::int IS NULL OR p.difficulty = $1)
         AND NOT EXISTS (
-          SELECT 1 FROM battle_match_rounds r
-          WHERE r.match_id = $2 AND r.problem_id = p.id
+          SELECT 1
+          FROM battle_match_rounds r
+          WHERE r.match_id = $2
+            AND r.problem_id = p.id
         )
       ORDER BY random()
       LIMIT 1
@@ -79,7 +90,14 @@ export async function POST(_: Request, ctx: { params: Promise<{ matchId: string 
       );
     }
 
-    const prob = problemRes.rows[0];
+    const prob = problemRes.rows[0] as {
+      id: string;
+      problem_text: string;
+      problem_answer_latex: string | null;
+      problem_answer_computed: string | null;
+      difficulty: number;
+    };
+
     const startsAt = new Date();
     const endsAt = new Date(startsAt.getTime() + Number(m.seconds_per_problem) * 1000);
 
@@ -92,13 +110,24 @@ export async function POST(_: Request, ctx: { params: Promise<{ matchId: string 
     );
 
     await client.query("COMMIT");
+
+    // Keep the response shape your frontend expects: { latex, difficulty, roundIndex }
+    // Since the table column is problem_text, we map it into "latex".
     return NextResponse.json({
-      problem: { id: prob.id, latex: prob.latex_question, difficulty: prob.rating, roundIndex: nextRoundIdx },
+      problem: {
+        id: prob.id,
+        latex: prob.problem_text,
+        difficulty: prob.difficulty,
+        roundIndex: nextRoundIdx,
+      },
       problemEndsAt: endsAt.toISOString(),
     });
   } catch (e: any) {
     await client.query("ROLLBACK");
-    return NextResponse.json({ error: e?.message ?? "Failed to serve next problem" }, { status: 500 });
+    return NextResponse.json(
+      { error: e?.message ?? "Failed to serve next problem" },
+      { status: 500 }
+    );
   } finally {
     client.release();
   }

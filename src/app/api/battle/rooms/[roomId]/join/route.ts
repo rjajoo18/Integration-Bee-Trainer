@@ -21,6 +21,12 @@ export async function POST(req: Request, ctx: { params: Promise<{ roomId: string
   try {
     await client.query("BEGIN");
 
+    // Acquire advisory lock to serialize joins for this room
+    await client.query(
+      `SELECT pg_advisory_xact_lock(hashtext('battle_room:' || $1))`,
+      [roomId]
+    );
+
     const roomRes = await client.query(
       `
       SELECT id, status, max_players, password_hash
@@ -59,6 +65,19 @@ export async function POST(req: Request, ctx: { params: Promise<{ roomId: string
       }
     }
 
+    // Check if user is already in the room (idempotency)
+    const existingRes = await client.query(
+      `SELECT 1 FROM battle_room_players WHERE room_id = $1 AND user_id = $2`,
+      [roomId, userId]
+    );
+
+    if (existingRes.rows.length > 0) {
+      // User already joined, return success
+      await client.query("COMMIT");
+      return NextResponse.json({ roomId, player: { id: userId } });
+    }
+
+    // Check capacity only for new joins
     const cntRes = await client.query(
       `SELECT COUNT(*)::int AS cnt FROM battle_room_players WHERE room_id = $1`,
       [roomId]
@@ -69,8 +88,9 @@ export async function POST(req: Request, ctx: { params: Promise<{ roomId: string
       return NextResponse.json({ error: "Room is full" }, { status: 400 });
     }
 
+    // Insert new player
     await client.query(
-      `INSERT INTO battle_room_players (room_id, user_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
+      `INSERT INTO battle_room_players (room_id, user_id) VALUES ($1,$2)`,
       [roomId, userId]
     );
 

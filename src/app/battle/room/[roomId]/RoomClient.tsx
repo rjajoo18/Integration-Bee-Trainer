@@ -2,25 +2,31 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useSession } from 'next-auth/react';
-import { Users, Settings, Play, LogOut, Check, X, Clock, Shield, Hash } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { Users, Settings, Play, LogOut, Check, X, Clock, Shield, Hash, Lock } from 'lucide-react';
 
 type RoomState = {
   room: {
     id: string;
     name: string;
-    difficulty: number;
+    difficulty: number | null;
     secondsPerProblem: number;
     maxPlayers: number;
     hasPassword: boolean;
     status: 'lobby' | 'in_game' | 'finished';
     hostUserId: number;
     createdAt: string;
+    currentMatchId: string | null;
   };
   players: { userId: number; joinedAt: string; isReady: boolean }[];
 };
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export default function RoomClient({ roomId }: { roomId: string }) {
   const { data: session, status } = useSession();
+  const router = useRouter();
   const currentUserId = session?.user ? (session.user as any).id : null;
 
   const [state, setState] = useState<RoomState | null>(null);
@@ -30,15 +36,23 @@ export default function RoomClient({ roomId }: { roomId: string }) {
   const [starting, setStarting] = useState(false);
   const [toggling, setToggling] = useState(false);
 
+  // Password join flow
+  const [needsJoinPassword, setNeedsJoinPassword] = useState(false);
+  const [joinPassword, setJoinPassword] = useState('');
+
   // Settings editing (host only)
   const [editMode, setEditMode] = useState(false);
   const [editName, setEditName] = useState('');
-  const [editDifficulty, setEditDifficulty] = useState(3);
+  const [editDifficulty, setEditDifficulty] = useState<string | number>('all');
   const [editSeconds, setEditSeconds] = useState(60);
   const [editMaxPlayers, setEditMaxPlayers] = useState(2);
+
+  // Password edit flow (host only)
+  const [editPassword, setEditPassword] = useState('');
+  const [clearPassword, setClearPassword] = useState(false);
+
   const [saving, setSaving] = useState(false);
 
-  // avoid leaving room when we intentionally navigate to match
   const navigatingToMatchRef = useRef(false);
 
   async function load() {
@@ -48,10 +62,32 @@ export default function RoomClient({ roomId }: { roomId: string }) {
     setState(j as RoomState);
   }
 
+  async function attemptJoin(password: string | null) {
+    const joinRes = await fetch(`/api/battle/rooms/${roomId}/join`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    });
+
+    if (!joinRes.ok) {
+      const j = await joinRes.json().catch(() => ({}));
+      const msg = (j as any)?.error ?? 'Failed to join';
+
+      // These are your server messages in join route
+      if (typeof msg === 'string' && msg.toLowerCase().includes('password')) {
+        setNeedsJoinPassword(true);
+      }
+
+      throw new Error(msg);
+    }
+
+    // success
+    setNeedsJoinPassword(false);
+  }
+
   useEffect(() => {
     if (status === 'loading') return;
 
-    // If unauthenticated, show a clean error instead of spamming join/leave
     if (status !== 'authenticated') {
       setErr('You must be signed in to join a room.');
       setState(null);
@@ -67,17 +103,8 @@ export default function RoomClient({ roomId }: { roomId: string }) {
       setLoading(true);
 
       try {
-        const joinRes = await fetch(`/api/battle/rooms/${roomId}/join`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password: null }),
-        });
-
-        if (!joinRes.ok) {
-          const j = await joinRes.json().catch(() => ({}));
-          throw new Error((j as any)?.error ?? 'Failed to join');
-        }
-
+        // first attempt with no password
+        await attemptJoin(null);
         if (!alive) return;
 
         await load();
@@ -85,9 +112,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
 
         interval = setInterval(() => {
           if (!alive) return;
-          load().catch(() => {
-            // keep last known good state; surface a soft error
-          });
+          load().catch(() => {});
         }, 1500);
       } catch (e: any) {
         if (!alive) return;
@@ -103,20 +128,35 @@ export default function RoomClient({ roomId }: { roomId: string }) {
       alive = false;
       if (interval) clearInterval(interval);
 
-      // IMPORTANT: your leave route deletes the room if host leaves in lobby.
-      // If we’re navigating to match, do NOT call leave, or you can race-delete the room.
       if (!navigatingToMatchRef.current) {
         fetch(`/api/battle/rooms/${roomId}/leave`, { method: 'POST' }).catch(() => {});
       }
     };
   }, [roomId, status]);
 
+  // Auto-redirect when match starts (guard that currentMatchId is actually a UUID)
+  useEffect(() => {
+    const cmid = state?.room?.currentMatchId ?? null;
+    if (state?.room?.status === 'in_game' && cmid) {
+      if (!UUID_RE.test(cmid)) {
+        setErr(`Room currentMatchId is not a UUID: ${cmid}`);
+        return;
+      }
+      navigatingToMatchRef.current = true;
+      router.push(`/battle/match/${cmid}`);
+    }
+  }, [state?.room?.status, state?.room?.currentMatchId, router]);
+
   useEffect(() => {
     if (state?.room) {
       setEditName(state.room.name);
-      setEditDifficulty(state.room.difficulty);
+      setEditDifficulty(state.room.difficulty === null ? 'all' : state.room.difficulty);
       setEditSeconds(state.room.secondsPerProblem);
       setEditMaxPlayers(state.room.maxPlayers);
+
+      // reset password edit widgets when room loads / refreshes
+      setEditPassword('');
+      setClearPassword(false);
     }
   }, [state?.room]);
 
@@ -129,6 +169,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
 
   const isReady = currentPlayer?.isReady ?? false;
   const allReady = state?.players.every((p) => p.isReady) ?? false;
+
   const canStart =
     !!state && state.players.length >= 2 && allReady && state.room.status === 'lobby';
 
@@ -159,18 +200,28 @@ export default function RoomClient({ roomId }: { roomId: string }) {
     setErr(null);
 
     try {
+      const payload: any = {
+        name: editName,
+        difficulty: editDifficulty,
+        secondsPerProblem: editSeconds,
+        maxPlayers: editMaxPlayers,
+      };
+
+      // password behavior:
+      // - if clearPassword => send password: null
+      // - else if editPassword non-empty => send password: <string>
+      // - else => do not include password (leave unchanged)
+      if (clearPassword) payload.password = null;
+      else if (editPassword.trim()) payload.password = editPassword.trim();
+
       const r = await fetch(`/api/battle/rooms/${roomId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: editName,
-          difficulty: editDifficulty,
-          secondsPerProblem: editSeconds,
-          maxPlayers: editMaxPlayers,
-        }),
+        body: JSON.stringify(payload),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error((j as any)?.error ?? 'Failed to update settings');
+
       await load();
       setEditMode(false);
     } catch (e: any) {
@@ -190,8 +241,8 @@ export default function RoomClient({ roomId }: { roomId: string }) {
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error((j as any)?.error ?? 'Failed to start');
 
-      navigatingToMatchRef.current = true;
-      window.location.href = `/battle/match/${(j as any).matchId}`;
+      // Let polling redirect
+      await load();
     } catch (e: any) {
       setErr(e?.message ?? 'Failed to start match');
       setStarting(false);
@@ -204,12 +255,73 @@ export default function RoomClient({ roomId }: { roomId: string }) {
     window.location.href = '/battle';
   }
 
+  async function submitJoinPassword() {
+    setErr(null);
+    setLoading(true);
+
+    try {
+      await attemptJoin(joinPassword.trim() || null);
+      await load();
+      setNeedsJoinPassword(false);
+    } catch (e: any) {
+      setErr(e?.message ?? 'Failed to join room');
+    } finally {
+      setLoading(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center">
         <div className="text-center">
           <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-blue-500 border-r-transparent" />
           <p className="mt-4 text-zinc-400">Loading room...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // If join failed due to password required, show a password prompt UI (instead of dumping them out)
+  if (!state && needsJoinPassword) {
+    return (
+      <div className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center px-4">
+        <div className="w-full max-w-md rounded-3xl border border-zinc-800 bg-zinc-900/40 p-6">
+          <div className="flex items-center gap-2 text-lg font-bold">
+            <Lock size={18} />
+            Password Required
+          </div>
+          <p className="mt-2 text-sm text-zinc-400">
+            This room is locked. Enter the password to join.
+          </p>
+
+          {err && (
+            <div className="mt-4 rounded-xl border border-red-900/50 bg-red-950/30 px-4 py-3 text-sm text-red-200">
+              {err}
+            </div>
+          )}
+
+          <input
+            type="password"
+            value={joinPassword}
+            onChange={(e) => setJoinPassword(e.target.value)}
+            className="mt-4 w-full bg-zinc-950 border border-zinc-700 rounded-xl px-4 py-2 text-sm outline-none focus:border-blue-500"
+            placeholder="Enter password"
+          />
+
+          <div className="mt-4 flex gap-2">
+            <button
+              onClick={submitJoinPassword}
+              className="flex-1 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-xl font-bold transition-colors"
+            >
+              Join
+            </button>
+            <button
+              onClick={() => (window.location.href = '/battle')}
+              className="flex-1 bg-zinc-800 hover:bg-zinc-700 text-white px-4 py-2 rounded-xl font-bold transition-colors"
+            >
+              Back
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -239,12 +351,16 @@ export default function RoomClient({ roomId }: { roomId: string }) {
       <div className="border-b border-zinc-800 bg-zinc-900/50 backdrop-blur-sm">
         <div className="mx-auto max-w-6xl px-6 py-4 flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-white">{room.name}</h1>
+            <h1 className="text-2xl font-bold text-white flex items-center gap-2">
+              {room.name}
+              {room.hasPassword && <Lock size={16} className="text-zinc-500" />}
+            </h1>
             <p className="text-sm text-zinc-500 font-mono flex items-center gap-2 mt-1">
               <Hash size={14} />
               {roomId.slice(0, 12)}
             </p>
           </div>
+
           <button
             onClick={leaveRoom}
             className="flex items-center gap-2 px-4 py-2 bg-zinc-800 hover:bg-zinc-700 rounded-xl transition-colors text-sm font-medium"
@@ -299,16 +415,22 @@ export default function RoomClient({ roomId }: { roomId: string }) {
 
                   <div>
                     <label className="block text-xs font-medium text-zinc-400 mb-2">
-                      Difficulty (1-10): {editDifficulty}
+                      Difficulty
                     </label>
-                    <input
-                      type="range"
-                      min="1"
-                      max="10"
-                      value={editDifficulty}
-                      onChange={(e) => setEditDifficulty(parseInt(e.target.value, 10))}
-                      className="w-full"
-                    />
+                    <select
+                      value={String(editDifficulty)}
+                      onChange={(e) =>
+                        setEditDifficulty(e.target.value === 'all' ? 'all' : Number(e.target.value))
+                      }
+                      className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-4 py-2 text-sm outline-none focus:border-blue-500"
+                    >
+                      <option value="all">All</option>
+                      <option value="1">1</option>
+                      <option value="2">2</option>
+                      <option value="3">3</option>
+                      <option value="4">4</option>
+                      <option value="5">5</option>
+                    </select>
                   </div>
 
                   <div>
@@ -333,11 +455,43 @@ export default function RoomClient({ roomId }: { roomId: string }) {
                     <input
                       type="range"
                       min="2"
-                      max="50"
+                      max="20"
                       value={editMaxPlayers}
                       onChange={(e) => setEditMaxPlayers(parseInt(e.target.value, 10))}
                       className="w-full"
                     />
+                  </div>
+
+                  <div className="rounded-2xl border border-zinc-800 bg-zinc-950/30 p-4">
+                    <div className="flex items-center gap-2 text-sm font-semibold">
+                      <Lock size={16} className="text-zinc-400" />
+                      Password
+                    </div>
+
+                    <label className="block text-xs font-medium text-zinc-400 mt-3 mb-2">
+                      Set new password (leave blank to keep unchanged)
+                    </label>
+                    <input
+                      type="password"
+                      value={editPassword}
+                      onChange={(e) => setEditPassword(e.target.value)}
+                      className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-4 py-2 text-sm outline-none focus:border-blue-500"
+                      placeholder="New password"
+                      autoComplete="new-password"
+                    />
+
+                    <label className="mt-3 flex items-center gap-2 text-xs text-zinc-400">
+                      <input
+                        type="checkbox"
+                        checked={clearPassword}
+                        onChange={(e) => setClearPassword(e.target.checked)}
+                      />
+                      Clear password (make room public)
+                    </label>
+
+                    <div className="mt-2 text-xs text-zinc-500">
+                      Current: {room.hasPassword ? 'Locked' : 'Public'}
+                    </div>
                   </div>
 
                   <button
@@ -355,7 +509,9 @@ export default function RoomClient({ roomId }: { roomId: string }) {
                       <Shield size={14} />
                       Difficulty
                     </div>
-                    <div className="text-2xl font-bold text-white">{room.difficulty}</div>
+                    <div className="text-2xl font-bold text-white">
+                      {room.difficulty === null ? 'All' : room.difficulty}
+                    </div>
                   </div>
 
                   <div className="bg-zinc-950/50 rounded-xl p-4 border border-zinc-800">
@@ -376,8 +532,10 @@ export default function RoomClient({ roomId }: { roomId: string }) {
 
                   <div className="bg-zinc-950/50 rounded-xl p-4 border border-zinc-800">
                     <div className="text-zinc-400 text-xs mb-1">Status</div>
-                    <div className="text-lg font-bold text-green-400 capitalize">
-                      {room.status}
+                    <div className="text-lg font-bold text-green-400 capitalize">{room.status}</div>
+                    <div className="mt-1 text-xs text-zinc-500 flex items-center gap-2">
+                      <Lock size={12} className="text-zinc-600" />
+                      {room.hasPassword ? 'Locked' : 'Public'}
                     </div>
                   </div>
                 </div>
@@ -418,8 +576,8 @@ export default function RoomClient({ roomId }: { roomId: string }) {
                     {players.length < 2
                       ? 'Need at least 2 players'
                       : !allReady
-                      ? 'All players must be ready'
-                      : ''}
+                        ? 'All players must be ready'
+                        : ''}
                   </p>
                 )}
               </div>
@@ -469,6 +627,12 @@ export default function RoomClient({ roomId }: { roomId: string }) {
                 </div>
               ))}
             </div>
+
+            {!room.hasPassword && (
+              <div className="mt-4 text-xs text-zinc-500">
+                Room is public (no password).
+              </div>
+            )}
           </div>
         </div>
       </div>

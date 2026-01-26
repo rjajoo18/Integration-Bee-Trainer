@@ -1,4 +1,3 @@
-// src/app/battle/page.tsx
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -18,7 +17,7 @@ import {
 type Room = {
   id: string;
   name: string;
-  difficulty: number;
+  difficulty: number | null;
   secondsPerProblem: number;
   maxPlayers: number;
   playerCount: number;
@@ -37,7 +36,7 @@ function clampInt(v: string, min: number, max: number, fallback: number) {
 export default function BattleLobbyPage() {
   // --- Create Room Form ---
   const [name, setName] = useState("Integral Duel");
-  const [difficulty, setDifficulty] = useState(3);
+  const [difficulty, setDifficulty] = useState<string | number>("all");
   const [secondsPerProblem, setSecondsPerProblem] = useState(60);
   const [maxPlayers, setMaxPlayers] = useState(2);
   const [password, setPassword] = useState("");
@@ -60,9 +59,9 @@ export default function BattleLobbyPage() {
     setRoomsError(null);
     try {
       const r = await fetch("/api/battle/rooms", { cache: "no-store" });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j?.error ?? "Failed to load rooms");
-      setRooms(j.rooms ?? []);
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error((j as any)?.error ?? "Failed to load rooms");
+      setRooms((j as any).rooms ?? []);
     } catch (e: any) {
       setRoomsError(e?.message ?? "Failed to load rooms");
     } finally {
@@ -111,10 +110,10 @@ export default function BattleLobbyPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j?.error ?? "Failed to create room");
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error((j as any)?.error ?? "Failed to create room");
 
-      window.location.href = `/battle/room/${j.room.id}`;
+      window.location.href = `/battle/room/${(j as any).room.id}`;
     } catch (e: any) {
       setActionErr(e?.message ?? "Failed to create room");
     } finally {
@@ -137,8 +136,8 @@ export default function BattleLobbyPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ password: pwd || null }),
       });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j?.error ?? "Failed to join room");
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error((j as any)?.error ?? "Failed to join room");
 
       window.location.href = `/battle/room/${roomId}`;
     } catch (e: any) {
@@ -181,7 +180,7 @@ export default function BattleLobbyPage() {
       </div>
 
       <div className="mx-auto max-w-6xl px-4 -mt-8">
-        {/* Toolbar (fixed layout) */}
+        {/* Toolbar */}
         <div className="rounded-3xl border border-zinc-800 bg-zinc-900 p-2 shadow-2xl ring-1 ring-white/5">
           <div className="flex flex-col lg:flex-row lg:items-center gap-2">
             {/* Left: inputs + settings */}
@@ -197,19 +196,27 @@ export default function BattleLobbyPage() {
               </div>
 
               <div className="flex items-center gap-4 px-4 overflow-x-auto no-scrollbar border border-zinc-800/0">
+                {/* Difficulty Dropdown */}
                 <div className="flex flex-col">
                   <span className="text-[9px] uppercase text-zinc-500 font-bold mb-1">
                     Difficulty
                   </span>
                   <div className="flex items-center gap-2">
                     <Shield size={14} className="text-indigo-400" />
-                    <input
-                      className="w-8 bg-transparent text-sm font-bold outline-none"
+                    <select
+                      className="bg-transparent text-sm font-bold outline-none border-none focus:ring-0 cursor-pointer"
                       value={difficulty}
                       onChange={(e) =>
-                        setDifficulty(clampInt(e.target.value, 1, 10, 3))
+                        setDifficulty(e.target.value === "all" ? "all" : Number(e.target.value))
                       }
-                    />
+                    >
+                      <option value="all">All</option>
+                      <option value="1">1</option>
+                      <option value="2">2</option>
+                      <option value="3">3</option>
+                      <option value="4">4</option>
+                      <option value="5">5</option>
+                    </select>
                   </div>
                 </div>
 
@@ -222,15 +229,12 @@ export default function BattleLobbyPage() {
                     <input
                       className="w-10 bg-transparent text-sm font-bold outline-none"
                       value={secondsPerProblem}
-                      onChange={(e) =>
-                        setSecondsPerProblem(
-                          clampInt(e.target.value, 10, 600, 60)
-                        )
-                      }
+                      onChange={(e) => setSecondsPerProblem(clampInt(e.target.value, 10, 600, 60))}
                     />
                   </div>
                 </div>
 
+                {/* Max Players: 2-20 */}
                 <div className="flex flex-col border-l border-zinc-800 pl-4">
                   <span className="text-[9px] uppercase text-zinc-500 font-bold mb-1">
                     Max Players
@@ -240,9 +244,7 @@ export default function BattleLobbyPage() {
                     <input
                       className="w-8 bg-transparent text-sm font-bold outline-none"
                       value={maxPlayers}
-                      onChange={(e) =>
-                        setMaxPlayers(clampInt(e.target.value, 2, 50, 2))
-                      }
+                      onChange={(e) => setMaxPlayers(clampInt(e.target.value, 2, 20, 2))}
                     />
                   </div>
                 </div>
@@ -254,6 +256,7 @@ export default function BattleLobbyPage() {
                   <div className="flex items-center gap-2">
                     <Lock size={14} className="text-zinc-500" />
                     <input
+                      type="password"
                       className="w-full bg-transparent text-sm font-bold outline-none placeholder:text-zinc-700"
                       placeholder="leave blank"
                       value={password}
@@ -264,7 +267,7 @@ export default function BattleLobbyPage() {
               </div>
             </div>
 
-            {/* Right: action button (cannot disappear) */}
+            {/* Right: action button */}
             <div className="flex justify-end">
               <button
                 type="button"
@@ -272,11 +275,7 @@ export default function BattleLobbyPage() {
                 disabled={creating}
                 className="shrink-0 cursor-pointer flex items-center gap-2 rounded-2xl bg-indigo-600 px-8 py-3.5 text-sm font-bold text-white transition-all hover:bg-indigo-500 hover:shadow-[0_0_20px_rgba(79,70,229,0.4)] active:scale-95 disabled:opacity-50"
               >
-                {creating ? (
-                  <RefreshCw className="animate-spin" size={18} />
-                ) : (
-                  <Plus size={18} />
-                )}
+                {creating ? <RefreshCw className="animate-spin" size={18} /> : <Plus size={18} />}
                 Create Duel
               </button>
             </div>
@@ -320,13 +319,13 @@ export default function BattleLobbyPage() {
                   Open Duels Only
                 </span>
                 <div
-                  className={`relative h-5 w-9 rounded-full transition-colors ${
+                  className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
                     showOpenOnly ? "bg-indigo-600" : "bg-zinc-700"
                   }`}
                 >
                   <div
-                    className={`absolute top-1 h-3 w-3 rounded-full bg-white transition-all ${
-                      showOpenOnly ? "left-5" : "left-1"
+                    className={`inline-block h-3 w-3 transform rounded-full bg-white transition-all ${
+                      showOpenOnly ? "translate-x-5" : "translate-x-1"
                     }`}
                   />
                 </div>
@@ -343,18 +342,14 @@ export default function BattleLobbyPage() {
           <div className="lg:col-span-3">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-sm font-bold text-zinc-500 tracking-wide uppercase">
-                Browse <span className="text-white">{filtered.length}</span>{" "}
-                results
+                Browse <span className="text-white">{filtered.length}</span> results
               </h2>
               <button
                 type="button"
                 onClick={fetchRooms}
                 className="cursor-pointer p-2 text-zinc-500 hover:text-white transition-colors bg-zinc-900 rounded-lg border border-zinc-800"
               >
-                <RefreshCw
-                  size={16}
-                  className={loadingRooms ? "animate-spin" : ""}
-                />
+                <RefreshCw size={16} className={loadingRooms ? "animate-spin" : ""} />
               </button>
             </div>
 
@@ -379,24 +374,18 @@ export default function BattleLobbyPage() {
                         >
                           {room.status === "lobby" ? "Open" : "Running"}
                         </span>
-                        {room.hasPassword && (
-                          <Lock size={16} className="text-zinc-600" />
-                        )}
+                        {room.hasPassword && <Lock size={16} className="text-zinc-600" />}
                       </div>
 
                       <div className="flex items-center gap-4 text-xs">
                         <div className="flex items-center gap-1.5 text-zinc-400">
                           <Trophy size={12} className="text-zinc-500" />
                           Host:{" "}
-                          <span className="text-zinc-200 font-medium">
-                            {room.hostName}
-                          </span>
+                          <span className="text-zinc-200 font-medium">{room.hostName}</span>
                         </div>
                         <div className="flex items-center gap-1.5 text-zinc-400">
                           <Hash size={12} className="text-zinc-500" />
-                          <span className="font-mono text-zinc-500">
-                            {room.id.slice(0, 8)}
-                          </span>
+                          <span className="font-mono text-zinc-500">{room.id.slice(0, 8)}</span>
                         </div>
                       </div>
                     </div>
@@ -408,7 +397,7 @@ export default function BattleLobbyPage() {
                             Difficulty
                           </span>
                           <span className="text-sm font-mono text-indigo-300 tracking-widest">
-                            {room.difficulty}
+                            {room.difficulty === null ? "All" : room.difficulty}
                           </span>
                         </div>
                         <div className="text-center">
@@ -425,9 +414,7 @@ export default function BattleLobbyPage() {
                           </span>
                           <span
                             className={`text-sm font-mono tracking-widest ${
-                              room.playerCount >= room.maxPlayers
-                                ? "text-zinc-500"
-                                : "text-green-400"
+                              room.playerCount >= room.maxPlayers ? "text-zinc-500" : "text-green-400"
                             }`}
                           >
                             {room.playerCount}/{room.maxPlayers}
@@ -438,10 +425,7 @@ export default function BattleLobbyPage() {
                       <button
                         type="button"
                         onClick={() => joinRoom(room.id, room.hasPassword)}
-                        disabled={
-                          room.status !== "lobby" ||
-                          room.playerCount >= room.maxPlayers
-                        }
+                        disabled={room.status !== "lobby" || room.playerCount >= room.maxPlayers}
                         className="cursor-pointer rounded-xl bg-zinc-100 px-8 py-3 text-sm font-black text-zinc-950 transition-all hover:bg-white hover:shadow-[0_0_20px_rgba(255,255,255,0.15)] disabled:opacity-10 disabled:grayscale active:scale-95 disabled:cursor-not-allowed"
                       >
                         JOIN
@@ -454,9 +438,7 @@ export default function BattleLobbyPage() {
               {!loadingRooms && filtered.length === 0 && (
                 <div className="rounded-3xl border border-dashed border-zinc-800 bg-zinc-900/20 p-20 text-center">
                   <Swords size={48} className="mx-auto text-zinc-800 mb-4" />
-                  <p className="text-zinc-500 text-sm">
-                    No battles match your search criteria.
-                  </p>
+                  <p className="text-zinc-500 text-sm">No battles match your search criteria.</p>
                 </div>
               )}
             </div>

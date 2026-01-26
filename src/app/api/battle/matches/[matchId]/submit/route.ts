@@ -88,7 +88,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ matchId: strin
     }
 
     const probRes = await client.query(
-      `SELECT canonical_answer FROM problems WHERE id=$1`,
+      `SELECT problem_answer_latex FROM integration_problems WHERE id=$1`,
       [problemId]
     );
     if (probRes.rows.length === 0) {
@@ -100,6 +100,17 @@ export async function POST(req: Request, ctx: { params: Promise<{ matchId: strin
     const correct = answersEquivalent(answer, canonical);
 
     if (!correct) {
+      // Update attempts for incorrect answer
+      await client.query(
+        `
+        INSERT INTO battle_problem_results (user_id, problem_id, match_id, room_id, is_correct, attempts)
+        VALUES ($1, $2, $3, $4, false, 1)
+        ON CONFLICT (user_id, problem_id)
+        DO UPDATE SET attempts = battle_problem_results.attempts + 1
+        `,
+        [userId, problemId, matchId, m.room_id]
+      );
+
       await client.query("COMMIT");
       return NextResponse.json({ correct: false, message: "Incorrect" });
     }
@@ -113,6 +124,20 @@ export async function POST(req: Request, ctx: { params: Promise<{ matchId: strin
       WHERE match_id=$1 AND user_id=$2
       `,
       [matchId, userId, newScore]
+    );
+
+    // Record correct answer in battle_problem_results
+    await client.query(
+      `
+      INSERT INTO battle_problem_results (user_id, problem_id, match_id, room_id, is_correct, attempts)
+      VALUES ($1, $2, $3, $4, true, 1)
+      ON CONFLICT (user_id, problem_id)
+      DO UPDATE SET 
+        is_correct = true,
+        solved_at = now(),
+        attempts = battle_problem_results.attempts + 1
+      `,
+      [userId, problemId, matchId, m.room_id]
     );
 
     if (newScore >= 3) {
