@@ -12,13 +12,21 @@ type RoomState = {
     difficulty: number | null;
     secondsPerProblem: number;
     maxPlayers: number;
-    hasPassword: boolean;
+    hasPassword?: boolean; // older API shape
     status: 'lobby' | 'in_game' | 'finished';
     hostUserId: number;
-    createdAt: string;
+    createdAt: string | null;
     currentMatchId: string | null;
   };
-  players: { userId: number; joinedAt: string; isReady: boolean }[];
+  players: Array<{
+    userId: number;
+    email: string | null;
+    isReady: boolean;
+    joinedAt: string | null;
+  }>;
+  // newer API shape (optional)
+  isPlayer?: boolean;
+  isHost?: boolean;
 };
 
 const UUID_RE =
@@ -55,6 +63,9 @@ export default function RoomClient({ roomId }: { roomId: string }) {
 
   const navigatingToMatchRef = useRef(false);
 
+  // Track if we've initialized the edit form from server data
+  const hasInitializedEditForm = useRef(false);
+
   async function load() {
     const r = await fetch(`/api/battle/rooms/${roomId}`, { cache: 'no-store' });
     const j = await r.json().catch(() => ({}));
@@ -73,7 +84,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
       const j = await joinRes.json().catch(() => ({}));
       const msg = (j as any)?.error ?? 'Failed to join';
 
-      // These are your server messages in join route
+      // If server indicates password required, surface password UI instead of booting them
       if (typeof msg === 'string' && msg.toLowerCase().includes('password')) {
         setNeedsJoinPassword(true);
       }
@@ -128,13 +139,25 @@ export default function RoomClient({ roomId }: { roomId: string }) {
       alive = false;
       if (interval) clearInterval(interval);
 
+      // Only auto-leave if we are not navigating into the match
       if (!navigatingToMatchRef.current) {
         fetch(`/api/battle/rooms/${roomId}/leave`, { method: 'POST' }).catch(() => {});
       }
     };
   }, [roomId, status]);
 
-  // Auto-redirect when match starts (guard that currentMatchId is actually a UUID)
+  // Initialize edit form ONLY ONCE when room data first loads
+  useEffect(() => {
+    if (state?.room && !hasInitializedEditForm.current) {
+      setEditName(state.room.name);
+      setEditDifficulty(state.room.difficulty === null ? 'all' : state.room.difficulty);
+      setEditSeconds(state.room.secondsPerProblem);
+      setEditMaxPlayers(state.room.maxPlayers);
+      hasInitializedEditForm.current = true;
+    }
+  }, [state?.room]);
+
+  // CRITICAL: Auto-redirect when match starts (guard matchId looks valid)
   useEffect(() => {
     const cmid = state?.room?.currentMatchId ?? null;
     if (state?.room?.status === 'in_game' && cmid) {
@@ -147,20 +170,8 @@ export default function RoomClient({ roomId }: { roomId: string }) {
     }
   }, [state?.room?.status, state?.room?.currentMatchId, router]);
 
-  useEffect(() => {
-    if (state?.room) {
-      setEditName(state.room.name);
-      setEditDifficulty(state.room.difficulty === null ? 'all' : state.room.difficulty);
-      setEditSeconds(state.room.secondsPerProblem);
-      setEditMaxPlayers(state.room.maxPlayers);
-
-      // reset password edit widgets when room loads / refreshes
-      setEditPassword('');
-      setClearPassword(false);
-    }
-  }, [state?.room]);
-
-  const isHost = currentUserId === state?.room?.hostUserId;
+  const computedIsHost = currentUserId === state?.room?.hostUserId;
+  const isHost = state?.isHost ?? computedIsHost;
 
   const currentPlayer = useMemo(
     () => state?.players.find((p) => p.userId === currentUserId),
@@ -202,7 +213,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
     try {
       const payload: any = {
         name: editName,
-        difficulty: editDifficulty,
+        difficulty: editDifficulty, // server can interpret "all" as null OR you map it server-side
         secondsPerProblem: editSeconds,
         maxPlayers: editMaxPlayers,
       };
@@ -224,6 +235,10 @@ export default function RoomClient({ roomId }: { roomId: string }) {
 
       await load();
       setEditMode(false);
+
+      // Reset password edit widgets after save
+      setEditPassword('');
+      setClearPassword(false);
     } catch (e: any) {
       setErr(e?.message ?? 'Failed to save settings');
     } finally {
@@ -241,7 +256,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error((j as any)?.error ?? 'Failed to start');
 
-      // Let polling redirect
+      // Let polling + redirect effect handle navigation
       await load();
     } catch (e: any) {
       setErr(e?.message ?? 'Failed to start match');
@@ -281,7 +296,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
     );
   }
 
-  // If join failed due to password required, show a password prompt UI (instead of dumping them out)
+  // If join failed due to password required, show a password prompt UI
   if (!state && needsJoinPassword) {
     return (
       <div className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center px-4">
@@ -306,6 +321,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
             onChange={(e) => setJoinPassword(e.target.value)}
             className="mt-4 w-full bg-zinc-950 border border-zinc-700 rounded-xl px-4 py-2 text-sm outline-none focus:border-blue-500"
             placeholder="Enter password"
+            autoComplete="current-password"
           />
 
           <div className="mt-4 flex gap-2">
@@ -344,6 +360,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
   }
 
   const { room, players } = state;
+  const hasPassword = !!(room as any).hasPassword; // supports older API shape
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
@@ -353,7 +370,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
           <div>
             <h1 className="text-2xl font-bold text-white flex items-center gap-2">
               {room.name}
-              {room.hasPassword && <Lock size={16} className="text-zinc-500" />}
+              {hasPassword && <Lock size={16} className="text-zinc-500" />}
             </h1>
             <p className="text-sm text-zinc-500 font-mono flex items-center gap-2 mt-1">
               <Hash size={14} />
@@ -490,7 +507,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
                     </label>
 
                     <div className="mt-2 text-xs text-zinc-500">
-                      Current: {room.hasPassword ? 'Locked' : 'Public'}
+                      Current: {hasPassword ? 'Locked' : 'Public'}
                     </div>
                   </div>
 
@@ -535,7 +552,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
                     <div className="text-lg font-bold text-green-400 capitalize">{room.status}</div>
                     <div className="mt-1 text-xs text-zinc-500 flex items-center gap-2">
                       <Lock size={12} className="text-zinc-600" />
-                      {room.hasPassword ? 'Locked' : 'Public'}
+                      {hasPassword ? 'Locked' : 'Public'}
                     </div>
                   </div>
                 </div>
@@ -592,46 +609,50 @@ export default function RoomClient({ roomId }: { roomId: string }) {
             </h2>
 
             <div className="space-y-3">
-              {players.map((p) => (
-                <div
-                  key={p.userId}
-                  className="flex items-center justify-between bg-zinc-950/50 rounded-xl p-3 border border-zinc-800"
-                >
-                  <div>
-                    <div className="text-sm font-medium text-white flex items-center gap-2">
-                      User {p.userId}
-                      {p.userId === room.hostUserId && (
-                        <span className="text-[10px] bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded-full font-bold">
-                          HOST
-                        </span>
+              {players.map((p) => {
+                const label = p.email?.trim() ? p.email : `User ${p.userId}`;
+                const isThisHost = p.userId === room.hostUserId;
+
+                return (
+                  <div
+                    key={p.userId}
+                    className="flex items-center justify-between bg-zinc-950/50 rounded-xl p-3 border border-zinc-800"
+                  >
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-white flex items-center gap-2 min-w-0">
+                        <span className="truncate">{label}</span>
+                        {isThisHost && (
+                          <span className="shrink-0 text-[10px] bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded-full font-bold">
+                            HOST
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs text-zinc-500">
+                        Joined{' '}
+                        {p.joinedAt ? new Date(p.joinedAt).toLocaleTimeString() : '—'}
+                      </div>
+                    </div>
+
+                    <div className="shrink-0">
+                      {p.isReady ? (
+                        <div className="flex items-center gap-1 text-green-400 text-xs font-bold">
+                          <Check size={14} />
+                          Ready
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1 text-zinc-500 text-xs">
+                          <X size={14} />
+                          Not Ready
+                        </div>
                       )}
                     </div>
-                    <div className="text-xs text-zinc-500">
-                      Joined {new Date(p.joinedAt).toLocaleTimeString()}
-                    </div>
                   </div>
-
-                  <div>
-                    {p.isReady ? (
-                      <div className="flex items-center gap-1 text-green-400 text-xs font-bold">
-                        <Check size={14} />
-                        Ready
-                      </div>
-                    ) : (
-                      <div className="flex items-center gap-1 text-zinc-500 text-xs">
-                        <X size={14} />
-                        Not Ready
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
 
-            {!room.hasPassword && (
-              <div className="mt-4 text-xs text-zinc-500">
-                Room is public (no password).
-              </div>
+            {!hasPassword && (
+              <div className="mt-4 text-xs text-zinc-500">Room is public (no password).</div>
             )}
           </div>
         </div>

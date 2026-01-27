@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useRef } from "react";
 import {
   Shield,
   Users,
@@ -40,6 +40,15 @@ export default function BattleLobbyPage() {
   const [secondsPerProblem, setSecondsPerProblem] = useState(60);
   const [maxPlayers, setMaxPlayers] = useState(2);
   const [password, setPassword] = useState("");
+
+  // Track if user has touched any field to prevent overwriting
+  const userHasEditedRef = useRef({
+    name: false,
+    difficulty: false,
+    secondsPerProblem: false,
+    maxPlayers: false,
+    password: false
+  });
 
   // --- Room List ---
   const [rooms, setRooms] = useState<Room[]>([]);
@@ -190,7 +199,10 @@ export default function BattleLobbyPage() {
                   className="w-full bg-transparent px-5 py-3 text-sm outline-none placeholder:text-zinc-600 border-none focus:ring-0"
                   placeholder="Room Name (e.g. Speed Integration)"
                   value={name}
-                  onChange={(e) => setName(e.target.value)}
+                  onChange={(e) => {
+                    setName(e.target.value);
+                    userHasEditedRef.current.name = true;
+                  }}
                 />
                 <div className="absolute bottom-1 left-5 right-5 h-[1px] bg-zinc-800 group-focus-within:bg-indigo-500 transition-colors" />
               </div>
@@ -206,9 +218,10 @@ export default function BattleLobbyPage() {
                     <select
                       className="bg-transparent text-sm font-bold outline-none border-none focus:ring-0 cursor-pointer"
                       value={difficulty}
-                      onChange={(e) =>
-                        setDifficulty(e.target.value === "all" ? "all" : Number(e.target.value))
-                      }
+                      onChange={(e) => {
+                        setDifficulty(e.target.value === "all" ? "all" : Number(e.target.value));
+                        userHasEditedRef.current.difficulty = true;
+                      }}
                     >
                       <option value="all">All</option>
                       <option value="1">1</option>
@@ -229,7 +242,10 @@ export default function BattleLobbyPage() {
                     <input
                       className="w-10 bg-transparent text-sm font-bold outline-none"
                       value={secondsPerProblem}
-                      onChange={(e) => setSecondsPerProblem(clampInt(e.target.value, 10, 600, 60))}
+                      onChange={(e) => {
+                        setSecondsPerProblem(clampInt(e.target.value, 10, 600, 60));
+                        userHasEditedRef.current.secondsPerProblem = true;
+                      }}
                     />
                   </div>
                 </div>
@@ -244,7 +260,10 @@ export default function BattleLobbyPage() {
                     <input
                       className="w-8 bg-transparent text-sm font-bold outline-none"
                       value={maxPlayers}
-                      onChange={(e) => setMaxPlayers(clampInt(e.target.value, 2, 20, 2))}
+                      onChange={(e) => {
+                        setMaxPlayers(clampInt(e.target.value, 2, 20, 2));
+                        userHasEditedRef.current.maxPlayers = true;
+                      }}
                     />
                   </div>
                 </div>
@@ -260,7 +279,10 @@ export default function BattleLobbyPage() {
                       className="w-full bg-transparent text-sm font-bold outline-none placeholder:text-zinc-700"
                       placeholder="leave blank"
                       value={password}
-                      onChange={(e) => setPassword(e.target.value)}
+                      onChange={(e) => {
+                        setPassword(e.target.value);
+                        userHasEditedRef.current.password = true;
+                      }}
                     />
                   </div>
                 </div>

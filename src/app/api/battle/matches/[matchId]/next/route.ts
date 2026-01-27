@@ -38,7 +38,7 @@ export async function POST(_: Request, ctx: { params: Promise<{ matchId: string 
     const m = matchRes.rows[0] as {
       status: string;
       host_user_id: number;
-      difficulty: number | null; // NULL => All
+      difficulty: number | null;
       seconds_per_problem: number;
     };
 
@@ -57,8 +57,6 @@ export async function POST(_: Request, ctx: { params: Promise<{ matchId: string 
     );
     const nextRoundIdx = Number(lastRound.rows[0].mx) + 1;
 
-    // Pick a new unused problem within THIS match.
-    // Uses integration_problems + difficulty 1-5 (or NULL = all 1-5).
     const problemRes = await client.query(
       `
       SELECT
@@ -109,10 +107,27 @@ export async function POST(_: Request, ctx: { params: Promise<{ matchId: string 
       [matchId, nextRoundIdx, prob.id, startsAt.toISOString(), endsAt.toISOString()]
     );
 
+    // CRITICAL: Commit BEFORE releasing client to ensure global visibility
     await client.query("COMMIT");
+    
+    // Post-commit verification (development only)
+    if (process.env.NODE_ENV === 'development') {
+      const verifyRound = await client.query(
+        `SELECT round_index, problem_id FROM battle_match_rounds 
+         WHERE match_id = $1 AND round_index = $2`,
+        [matchId, nextRoundIdx]
+      );
+      
+      console.log('[DEBUG /next] Round created and committed:', {
+        matchId,
+        roundIndex: nextRoundIdx,
+        problemId: prob.id,
+        verificationRowCount: verifyRound.rows.length,
+        verifiedProblemId: verifyRound.rows[0]?.problem_id,
+        commitTimestamp: new Date().toISOString()
+      });
+    }
 
-    // Keep the response shape your frontend expects: { latex, difficulty, roundIndex }
-    // Since the table column is problem_text, we map it into "latex".
     return NextResponse.json({
       problem: {
         id: prob.id,
@@ -121,9 +136,16 @@ export async function POST(_: Request, ctx: { params: Promise<{ matchId: string 
         roundIndex: nextRoundIdx,
       },
       problemEndsAt: endsAt.toISOString(),
+      ...(process.env.NODE_ENV === 'development' && {
+        debug: {
+          roundCreated: true,
+          commitComplete: true
+        }
+      })
     });
   } catch (e: any) {
     await client.query("ROLLBACK");
+    console.error('[ERROR /next]', e);
     return NextResponse.json(
       { error: e?.message ?? "Failed to serve next problem" },
       { status: 500 }
