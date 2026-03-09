@@ -14,13 +14,10 @@ export default function RootLayout({
     <html lang="en">
       <body className="min-h-screen bg-background text-foreground">
         <Providers>
-          {/* Navbar */}
-          <header className="sticky top-0 z-50">
-            <Navbar />
-          </header>
-
-          {/* Page content */}
-          <main className="min-h-[calc(100vh-64px)]">{children}</main>
+          {/* Navbar is position:fixed so it has no flow height.
+              pt-16 on main pushes all page content below the 64px navbar. */}
+          <Navbar />
+          <main className="pt-16">{children}</main>
         </Providers>
       </body>
     </html>

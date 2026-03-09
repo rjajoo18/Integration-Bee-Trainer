@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh repo:*)",
+      "Bash(cd C:\\\\College\\\\Projects\\\\Integration Bee Trainer\\\\intbeetrainer:*)",
+      "Bash(cp:*)",
+      "mcp__ide__getDiagnostics",
+      "Bash(cd C:\\\\College\\\\Projects\\\\Integration Bee Trainer:*)",
+      "Bash(head:*)",
+      "Bash(grep:*)",
+      "Bash(test:*)"
+    ]
+  }
+}

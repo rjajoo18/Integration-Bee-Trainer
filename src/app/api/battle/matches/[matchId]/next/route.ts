@@ -8,11 +8,14 @@ export async function POST(_: Request, ctx: { params: Promise<{ matchId: string 
   let userId: number;
   try {
     userId = await requireUserId();
-  } catch {
+  } catch (error) {
+    console.error('[NEXT] Auth failed:', error);
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const { matchId } = await ctx.params;
+  console.log('[NEXT] Request to serve next problem:', { matchId, userId });
+  
   const client = await pool.connect();
 
   try {
@@ -32,6 +35,7 @@ export async function POST(_: Request, ctx: { params: Promise<{ matchId: string 
 
     if (matchRes.rows.length === 0) {
       await client.query("ROLLBACK");
+      console.error('[NEXT] Match not found:', matchId);
       return NextResponse.json({ error: "Match not found" }, { status: 404 });
     }
 
@@ -44,10 +48,13 @@ export async function POST(_: Request, ctx: { params: Promise<{ matchId: string 
 
     if (m.status !== "in_game") {
       await client.query("ROLLBACK");
+      console.error('[NEXT] Match not active:', m.status);
       return NextResponse.json({ error: "Match is not active" }, { status: 400 });
     }
+    
     if (m.host_user_id !== userId) {
       await client.query("ROLLBACK");
+      console.error('[NEXT] User not host:', { userId, hostUserId: m.host_user_id });
       return NextResponse.json({ error: "Only host can advance problems" }, { status: 403 });
     }
 
@@ -57,6 +64,7 @@ export async function POST(_: Request, ctx: { params: Promise<{ matchId: string 
     );
     const nextRoundIdx = Number(lastRound.rows[0].mx) + 1;
 
+    // CRITICAL: Select problem where id is TEXT (like "MIT-2010-Q22"), not UUID
     const problemRes = await client.query(
       `
       SELECT
@@ -82,6 +90,7 @@ export async function POST(_: Request, ctx: { params: Promise<{ matchId: string 
 
     if (problemRes.rows.length === 0) {
       await client.query("ROLLBACK");
+      console.error('[NEXT] No unused problems available');
       return NextResponse.json(
         { error: "No unused problems available at this difficulty" },
         { status: 400 }
@@ -99,6 +108,7 @@ export async function POST(_: Request, ctx: { params: Promise<{ matchId: string 
     const startsAt = new Date();
     const endsAt = new Date(startsAt.getTime() + Number(m.seconds_per_problem) * 1000);
 
+    // Insert round - problem_id is TEXT
     await client.query(
       `
       INSERT INTO battle_match_rounds (match_id, round_index, problem_id, starts_at, ends_at)
@@ -107,10 +117,17 @@ export async function POST(_: Request, ctx: { params: Promise<{ matchId: string 
       [matchId, nextRoundIdx, prob.id, startsAt.toISOString(), endsAt.toISOString()]
     );
 
-    // CRITICAL: Commit BEFORE releasing client to ensure global visibility
+    // CRITICAL: Commit BEFORE releasing client
     await client.query("COMMIT");
     
-    // Post-commit verification (development only)
+    console.log('[NEXT] Round created:', {
+      matchId,
+      roundIndex: nextRoundIdx,
+      problemId: prob.id,
+      timestamp: new Date().toISOString()
+    });
+
+    // Post-commit verification
     if (process.env.NODE_ENV === 'development') {
       const verifyRound = await client.query(
         `SELECT round_index, problem_id FROM battle_match_rounds 
@@ -118,13 +135,9 @@ export async function POST(_: Request, ctx: { params: Promise<{ matchId: string 
         [matchId, nextRoundIdx]
       );
       
-      console.log('[DEBUG /next] Round created and committed:', {
-        matchId,
-        roundIndex: nextRoundIdx,
-        problemId: prob.id,
-        verificationRowCount: verifyRound.rows.length,
+      console.log('[NEXT] Verification:', {
+        rowCount: verifyRound.rows.length,
         verifiedProblemId: verifyRound.rows[0]?.problem_id,
-        commitTimestamp: new Date().toISOString()
       });
     }
 
@@ -145,7 +158,7 @@ export async function POST(_: Request, ctx: { params: Promise<{ matchId: string 
     });
   } catch (e: any) {
     await client.query("ROLLBACK");
-    console.error('[ERROR /next]', e);
+    console.error('[NEXT] Error:', e);
     return NextResponse.json(
       { error: e?.message ?? "Failed to serve next problem" },
       { status: 500 }

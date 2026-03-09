@@ -20,8 +20,10 @@ export async function GET() {
         r.status,
         r.created_at,
         r.host_user_id,
+        COALESCE(u.email, 'Unknown') AS host_name,
         COALESCE(p.cnt, 0) AS player_count
       FROM battle_rooms r
+      LEFT JOIN users u ON u.id = r.host_user_id
       LEFT JOIN (
         SELECT room_id, COUNT(*)::int AS cnt
         FROM battle_room_players
@@ -37,13 +39,14 @@ export async function GET() {
     const rooms = result.rows.map((row) => ({
       id: row.id,
       name: row.name,
-      difficulty: row.difficulty, // null => "All" on the client
+      difficulty: row.difficulty,
       secondsPerProblem: row.seconds_per_problem,
       maxPlayers: row.max_players,
       playerCount: row.player_count,
       hasPassword: row.has_password,
       status: row.status,
       hostUserId: row.host_user_id,
+      hostName: row.host_name,
       createdAt: row.created_at,
     }));
 
@@ -60,7 +63,8 @@ export async function POST(req: Request) {
   let userId: number;
   try {
     userId = await requireUserId();
-  } catch {
+  } catch (error) {
+    console.error('[CREATE_ROOM] Auth failed:', error);
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -79,7 +83,7 @@ export async function POST(req: Request) {
       difficultyRaw === "all" ||
       difficultyRaw === "All"
     ) {
-      difficulty = null; // NULL means "All"
+      difficulty = null;
     } else {
       const d = Number(difficultyRaw);
       if (!Number.isFinite(d) || d < 1 || d > 5) {
@@ -107,6 +111,13 @@ export async function POST(req: Request) {
     }
 
     const passwordHash = password ? await hashPassword(password) : null;
+
+    console.log('[CREATE_ROOM] Creating room:', {
+      userId,
+      name,
+      difficulty,
+      hasPassword: !!passwordHash
+    });
 
     const client = await pool.connect();
     try {
@@ -140,6 +151,10 @@ export async function POST(req: Request) {
 
       const room = ins.rows[0];
 
+      // CRITICAL FIX: Host is auto-added as ready, but this is OK because:
+      // 1. Host created the room, so they "know" the password
+      // 2. Host can't join their own room via /join (they're already in it)
+      // 3. This doesn't bypass password for OTHER users
       await client.query(
         `
         INSERT INTO battle_room_players (room_id, user_id, is_ready)
@@ -151,11 +166,13 @@ export async function POST(req: Request) {
 
       await client.query("COMMIT");
 
+      console.log('[CREATE_ROOM] Room created successfully:', room.id);
+
       return NextResponse.json({
         room: {
           id: room.id,
           name: room.name,
-          difficulty: room.difficulty, // null => "All"
+          difficulty: room.difficulty,
           secondsPerProblem: room.seconds_per_problem,
           maxPlayers: room.max_players,
           playerCount: 1,
@@ -172,7 +189,7 @@ export async function POST(req: Request) {
       client.release();
     }
   } catch (e: any) {
-    console.error("Room creation error:", e);
+    console.error('[CREATE_ROOM] Error:', e);
     return NextResponse.json({ error: e?.message ?? "Failed to create room" }, { status: 500 });
   }
 }

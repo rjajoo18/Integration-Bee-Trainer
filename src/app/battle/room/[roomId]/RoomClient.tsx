@@ -3,7 +3,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
-import { Users, Settings, Play, LogOut, Check, X, Clock, Shield, Hash, Lock } from 'lucide-react';
+import {
+  Users, Play, LogOut, Check, X, Clock, Shield, Lock,
+  Copy, CheckCheck, Settings, Globe, AlertTriangle, Swords,
+} from 'lucide-react';
 
 type RoomState = {
   room: {
@@ -12,7 +15,7 @@ type RoomState = {
     difficulty: number | null;
     secondsPerProblem: number;
     maxPlayers: number;
-    hasPassword?: boolean; // older API shape
+    hasPassword?: boolean;
     status: 'lobby' | 'in_game' | 'finished';
     hostUserId: number;
     createdAt: string | null;
@@ -24,13 +27,27 @@ type RoomState = {
     isReady: boolean;
     joinedAt: string | null;
   }>;
-  // newer API shape (optional)
   isPlayer?: boolean;
   isHost?: boolean;
 };
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const AVATAR_COLORS = [
+  'bg-violet-500', 'bg-blue-500', 'bg-emerald-500', 'bg-amber-500',
+  'bg-rose-500', 'bg-sky-500', 'bg-indigo-500', 'bg-pink-500',
+];
+
+function getAvatarColor(str: string) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash);
+  return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
+}
+
+function displayName(email: string | null, userId: number): string {
+  if (!email?.trim()) return `Player ${userId}`;
+  return email.includes('@') ? email.split('@')[0] : email;
+}
 
 export default function RoomClient({ roomId }: { roomId: string }) {
   const { data: session, status } = useSession();
@@ -40,34 +57,37 @@ export default function RoomClient({ roomId }: { roomId: string }) {
   const [state, setState] = useState<RoomState | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [roomClosed, setRoomClosed] = useState(false);
 
   const [starting, setStarting] = useState(false);
   const [toggling, setToggling] = useState(false);
+  const [copied, setCopied] = useState(false);
 
-  // Password join flow
   const [needsJoinPassword, setNeedsJoinPassword] = useState(false);
   const [joinPassword, setJoinPassword] = useState('');
 
-  // Settings editing (host only)
   const [editMode, setEditMode] = useState(false);
   const [editName, setEditName] = useState('');
   const [editDifficulty, setEditDifficulty] = useState<string | number>('all');
   const [editSeconds, setEditSeconds] = useState(60);
   const [editMaxPlayers, setEditMaxPlayers] = useState(2);
-
-  // Password edit flow (host only)
   const [editPassword, setEditPassword] = useState('');
   const [clearPassword, setClearPassword] = useState(false);
-
   const [saving, setSaving] = useState(false);
 
   const navigatingToMatchRef = useRef(false);
-
-  // Track if we've initialized the edit form from server data
   const hasInitializedEditForm = useRef(false);
 
   async function load() {
     const r = await fetch(`/api/battle/rooms/${roomId}`, { cache: 'no-store' });
+
+    // Room was deleted (host left) — notify all players
+    if (r.status === 404) {
+      setRoomClosed(true);
+      setState(null);
+      return;
+    }
+
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error((j as any)?.error ?? 'Failed to load room');
     setState(j as RoomState);
@@ -83,16 +103,11 @@ export default function RoomClient({ roomId }: { roomId: string }) {
     if (!joinRes.ok) {
       const j = await joinRes.json().catch(() => ({}));
       const msg = (j as any)?.error ?? 'Failed to join';
-
-      // If server indicates password required, surface password UI instead of booting them
       if (typeof msg === 'string' && msg.toLowerCase().includes('password')) {
         setNeedsJoinPassword(true);
       }
-
       throw new Error(msg);
     }
-
-    // success
     setNeedsJoinPassword(false);
   }
 
@@ -112,15 +127,11 @@ export default function RoomClient({ roomId }: { roomId: string }) {
     async function joinThenPoll() {
       setErr(null);
       setLoading(true);
-
       try {
-        // first attempt with no password
         await attemptJoin(null);
         if (!alive) return;
-
         await load();
         setLoading(false);
-
         interval = setInterval(() => {
           if (!alive) return;
           load().catch(() => {});
@@ -138,15 +149,12 @@ export default function RoomClient({ roomId }: { roomId: string }) {
     return () => {
       alive = false;
       if (interval) clearInterval(interval);
-
-      // Only auto-leave if we are not navigating into the match
       if (!navigatingToMatchRef.current) {
         fetch(`/api/battle/rooms/${roomId}/leave`, { method: 'POST' }).catch(() => {});
       }
     };
   }, [roomId, status]);
 
-  // Initialize edit form ONLY ONCE when room data first loads
   useEffect(() => {
     if (state?.room && !hasInitializedEditForm.current) {
       setEditName(state.room.name);
@@ -157,7 +165,6 @@ export default function RoomClient({ roomId }: { roomId: string }) {
     }
   }, [state?.room]);
 
-  // CRITICAL: Auto-redirect when match starts (guard matchId looks valid)
   useEffect(() => {
     const cmid = state?.room?.currentMatchId ?? null;
     if (state?.room?.status === 'in_game' && cmid) {
@@ -180,15 +187,12 @@ export default function RoomClient({ roomId }: { roomId: string }) {
 
   const isReady = currentPlayer?.isReady ?? false;
   const allReady = state?.players.every((p) => p.isReady) ?? false;
-
-  const canStart =
-    !!state && state.players.length >= 2 && allReady && state.room.status === 'lobby';
+  const canStart = !!state && state.players.length >= 2 && allReady && state.room.status === 'lobby';
 
   async function toggleReady() {
     if (!state || toggling) return;
     setToggling(true);
     setErr(null);
-
     try {
       const r = await fetch(`/api/battle/rooms/${roomId}/ready`, {
         method: 'POST',
@@ -209,19 +213,13 @@ export default function RoomClient({ roomId }: { roomId: string }) {
     if (!isHost || saving) return;
     setSaving(true);
     setErr(null);
-
     try {
       const payload: any = {
         name: editName,
-        difficulty: editDifficulty, // server can interpret "all" as null OR you map it server-side
+        difficulty: editDifficulty,
         secondsPerProblem: editSeconds,
         maxPlayers: editMaxPlayers,
       };
-
-      // password behavior:
-      // - if clearPassword => send password: null
-      // - else if editPassword non-empty => send password: <string>
-      // - else => do not include password (leave unchanged)
       if (clearPassword) payload.password = null;
       else if (editPassword.trim()) payload.password = editPassword.trim();
 
@@ -232,11 +230,8 @@ export default function RoomClient({ roomId }: { roomId: string }) {
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error((j as any)?.error ?? 'Failed to update settings');
-
       await load();
       setEditMode(false);
-
-      // Reset password edit widgets after save
       setEditPassword('');
       setClearPassword(false);
     } catch (e: any) {
@@ -250,13 +245,10 @@ export default function RoomClient({ roomId }: { roomId: string }) {
     if (!canStart || starting) return;
     setStarting(true);
     setErr(null);
-
     try {
       const r = await fetch(`/api/battle/rooms/${roomId}/start`, { method: 'POST' });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error((j as any)?.error ?? 'Failed to start');
-
-      // Let polling + redirect effect handle navigation
       await load();
     } catch (e: any) {
       setErr(e?.message ?? 'Failed to start match');
@@ -273,7 +265,6 @@ export default function RoomClient({ roomId }: { roomId: string }) {
   async function submitJoinPassword() {
     setErr(null);
     setLoading(true);
-
     try {
       await attemptJoin(joinPassword.trim() || null);
       await load();
@@ -285,55 +276,78 @@ export default function RoomClient({ roomId }: { roomId: string }) {
     }
   }
 
-  if (loading) {
+  function copyCode() {
+    navigator.clipboard.writeText(roomId).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  }
+
+  // ─── Room closed by host ───────────────────────────────────────────
+  if (roomClosed) {
     return (
-      <div className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center">
-        <div className="text-center">
-          <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-blue-500 border-r-transparent" />
-          <p className="mt-4 text-zinc-400">Loading room...</p>
+      <div className="min-h-[calc(100vh-4rem)] bg-[#080c14] text-white flex items-center justify-center px-4">
+        <div className="text-center max-w-sm">
+          <AlertTriangle size={40} className="text-amber-400 mx-auto mb-4" />
+          <h2 className="text-2xl font-black mb-2">Room Closed</h2>
+          <p className="text-sm text-zinc-500 mb-6">The host left the room. It has been closed.</p>
+          <button
+            onClick={() => (window.location.href = '/battle')}
+            className="bg-indigo-600 hover:bg-indigo-500 text-white px-8 py-3 rounded-xl font-bold transition-all active:scale-95"
+          >
+            Back to Lobby
+          </button>
         </div>
       </div>
     );
   }
 
-  // If join failed due to password required, show a password prompt UI
+  // ─── Loading ───────────────────────────────────────────────────────
+  if (loading) {
+    return (
+      <div className="min-h-[calc(100vh-4rem)] bg-[#080c14] text-white flex items-center justify-center">
+        <div className="text-center">
+          <div className="inline-block h-8 w-8 rounded-full border-2 border-indigo-500 border-t-transparent animate-spin mb-4" />
+          <p className="text-sm text-zinc-500">Joining room…</p>
+        </div>
+      </div>
+    );
+  }
+
+  // ─── Password prompt ───────────────────────────────────────────────
   if (!state && needsJoinPassword) {
     return (
-      <div className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center px-4">
-        <div className="w-full max-w-md rounded-3xl border border-zinc-800 bg-zinc-900/40 p-6">
-          <div className="flex items-center gap-2 text-lg font-bold">
-            <Lock size={18} />
+      <div className="min-h-[calc(100vh-4rem)] bg-[#080c14] text-white flex items-center justify-center px-4">
+        <div className="w-full max-w-sm rounded-2xl border border-white/10 bg-white/[0.03] p-7 shadow-2xl">
+          <div className="flex items-center gap-2 text-base font-bold mb-2">
+            <Lock size={18} className="text-indigo-400" />
             Password Required
           </div>
-          <p className="mt-2 text-sm text-zinc-400">
-            This room is locked. Enter the password to join.
-          </p>
-
+          <p className="text-sm text-zinc-500 mb-5">This is a private room. Enter the password to join.</p>
           {err && (
-            <div className="mt-4 rounded-xl border border-red-900/50 bg-red-950/30 px-4 py-3 text-sm text-red-200">
+            <div className="mb-4 rounded-xl bg-red-950/30 border border-red-900/30 px-4 py-3 text-sm text-red-300">
               {err}
             </div>
           )}
-
           <input
             type="password"
             value={joinPassword}
             onChange={(e) => setJoinPassword(e.target.value)}
-            className="mt-4 w-full bg-zinc-950 border border-zinc-700 rounded-xl px-4 py-2 text-sm outline-none focus:border-blue-500"
-            placeholder="Enter password"
-            autoComplete="current-password"
+            onKeyDown={(e) => e.key === 'Enter' && submitJoinPassword()}
+            className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-base text-white placeholder:text-zinc-600 outline-none focus:border-indigo-500/50 mb-4 transition-colors"
+            placeholder="Enter password…"
+            autoFocus
           />
-
-          <div className="mt-4 flex gap-2">
+          <div className="flex gap-2">
             <button
               onClick={submitJoinPassword}
-              className="flex-1 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-xl font-bold transition-colors"
+              className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white py-3 rounded-xl text-sm font-bold transition-all active:scale-95"
             >
-              Join
+              Join Room
             </button>
             <button
               onClick={() => (window.location.href = '/battle')}
-              className="flex-1 bg-zinc-800 hover:bg-zinc-700 text-white px-4 py-2 rounded-xl font-bold transition-colors"
+              className="px-4 py-3 rounded-xl text-sm text-zinc-500 hover:text-white hover:bg-white/5 transition-colors"
             >
               Back
             </button>
@@ -343,14 +357,15 @@ export default function RoomClient({ roomId }: { roomId: string }) {
     );
   }
 
+  // ─── Error / not found ─────────────────────────────────────────────
   if (!state) {
     return (
-      <div className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center">
+      <div className="min-h-[calc(100vh-4rem)] bg-[#080c14] text-white flex items-center justify-center">
         <div className="text-center">
-          <p className="text-red-400 mb-4">{err || 'Room not found'}</p>
+          <p className="text-red-400 text-sm mb-4">{err || 'Room not found'}</p>
           <button
             onClick={() => (window.location.href = '/battle')}
-            className="px-6 py-2 bg-zinc-800 hover:bg-zinc-700 rounded-xl transition-colors"
+            className="px-6 py-2.5 bg-white/[0.06] hover:bg-white/[0.1] border border-white/10 rounded-xl text-sm transition-colors"
           >
             Back to Lobby
           </button>
@@ -360,56 +375,68 @@ export default function RoomClient({ roomId }: { roomId: string }) {
   }
 
   const { room, players } = state;
-  const hasPassword = !!(room as any).hasPassword; // supports older API shape
+  const hasPassword = !!(room as any).hasPassword;
+  const difficultyLabel = room.difficulty === null ? 'All Levels' : `Level ${room.difficulty}`;
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100">
-      {/* Header */}
-      <div className="border-b border-zinc-800 bg-zinc-900/50 backdrop-blur-sm">
-        <div className="mx-auto max-w-6xl px-6 py-4 flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-white flex items-center gap-2">
-              {room.name}
-              {hasPassword && <Lock size={16} className="text-zinc-500" />}
-            </h1>
-            <p className="text-sm text-zinc-500 font-mono flex items-center gap-2 mt-1">
-              <Hash size={14} />
-              {roomId.slice(0, 12)}
-            </p>
+    <div className="min-h-screen bg-[#080c14] text-white">
+
+      {/* ─── Header ──────────────────────────────────────── */}
+      <div className="border-b border-white/[0.06] bg-[#0a0f1c]/90 backdrop-blur-sm sticky top-16 z-10">
+        <div className="mx-auto max-w-5xl px-6 py-3 flex items-center gap-4">
+          <button
+            onClick={leaveRoom}
+            className="flex items-center gap-1.5 text-sm text-zinc-500 hover:text-red-400 font-medium transition-colors"
+          >
+            <LogOut size={14} />
+            <span className="hidden sm:inline">Leave</span>
+          </button>
+
+          <div className="flex-1 flex flex-col items-center">
+            <h1 className="text-sm font-bold text-white leading-tight">{room.name}</h1>
+            <div className="flex items-center gap-1.5 mt-0.5">
+              {hasPassword && <Lock size={9} className="text-zinc-600" />}
+              <span className="text-[10px] text-zinc-600 font-mono">{roomId.slice(0, 8)}…</span>
+            </div>
           </div>
 
           <button
-            onClick={leaveRoom}
-            className="flex items-center gap-2 px-4 py-2 bg-zinc-800 hover:bg-zinc-700 rounded-xl transition-colors text-sm font-medium"
+            onClick={copyCode}
+            className="flex items-center gap-2 bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.07] rounded-lg px-3 py-2 text-xs font-mono transition-all"
           >
-            <LogOut size={16} />
-            Leave Room
+            {copied ? (
+              <><CheckCheck size={12} className="text-emerald-400" /><span className="text-emerald-400">Copied!</span></>
+            ) : (
+              <><Copy size={12} className="text-zinc-600" /><span className="text-zinc-500">Copy ID</span></>
+            )}
           </button>
         </div>
       </div>
 
-      <div className="mx-auto max-w-6xl px-6 py-8">
+      {/* ─── Body ────────────────────────────────────────── */}
+      <div className="mx-auto max-w-5xl px-6 py-8">
+
         {err && (
-          <div className="mb-6 rounded-2xl border border-red-900/50 bg-red-950/30 px-4 py-3 text-sm text-red-300 flex items-center gap-3">
-            <X size={16} />
-            {err}
+          <div className="mb-6 rounded-xl bg-red-950/20 border border-red-900/30 px-4 py-3 text-sm text-red-300 flex items-center gap-2">
+            <X size={14} /> {err}
           </div>
         )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Left: Settings + Controls */}
-          <div className="lg:col-span-2 space-y-6">
-            {/* Room Settings */}
-            <div className="rounded-3xl border border-zinc-800 bg-zinc-900/40 p-6">
-              <div className="flex items-center justify-between mb-6">
-                <h2 className="text-lg font-bold flex items-center gap-2">
-                  <Settings size={20} />
-                  Room Settings
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+
+          {/* ── Left ── */}
+          <div className="lg:col-span-2 space-y-4">
+
+            {/* Settings Card */}
+            <div className="rounded-2xl border border-white/[0.07] bg-white/[0.02] p-6">
+              <div className="flex items-center justify-between mb-5">
+                <h2 className="text-[10px] font-black uppercase tracking-widest text-zinc-600 flex items-center gap-1.5">
+                  <Settings size={11} /> Room Settings
                 </h2>
                 {isHost && room.status === 'lobby' && (
                   <button
                     onClick={() => setEditMode(!editMode)}
-                    className="text-sm text-blue-400 hover:text-blue-300 font-medium"
+                    className="text-xs text-indigo-400 hover:text-indigo-300 font-semibold transition-colors"
                   >
                     {editMode ? 'Cancel' : 'Edit'}
                   </button>
@@ -419,181 +446,145 @@ export default function RoomClient({ roomId }: { roomId: string }) {
               {editMode ? (
                 <div className="space-y-4">
                   <div>
-                    <label className="block text-xs font-medium text-zinc-400 mb-2">
-                      Room Name
-                    </label>
+                    <label className="block text-[10px] font-black uppercase tracking-widest text-zinc-600 mb-1.5">Room Name</label>
                     <input
                       type="text"
                       value={editName}
                       onChange={(e) => setEditName(e.target.value)}
-                      className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-4 py-2 text-sm outline-none focus:border-blue-500"
+                      className="w-full bg-white/[0.04] border border-white/[0.08] rounded-xl px-4 py-2.5 text-sm text-white outline-none focus:border-indigo-500/50 transition-colors"
                     />
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-medium text-zinc-400 mb-2">
-                      Difficulty
-                    </label>
-                    <select
-                      value={String(editDifficulty)}
-                      onChange={(e) =>
-                        setEditDifficulty(e.target.value === 'all' ? 'all' : Number(e.target.value))
-                      }
-                      className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-4 py-2 text-sm outline-none focus:border-blue-500"
-                    >
-                      <option value="all">All</option>
-                      <option value="1">1</option>
-                      <option value="2">2</option>
-                      <option value="3">3</option>
-                      <option value="4">4</option>
-                      <option value="5">5</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-zinc-400 mb-2">
-                      Seconds per Problem: {editSeconds}s
-                    </label>
-                    <input
-                      type="range"
-                      min="10"
-                      max="600"
-                      step="10"
-                      value={editSeconds}
-                      onChange={(e) => setEditSeconds(parseInt(e.target.value, 10))}
-                      className="w-full"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-zinc-400 mb-2">
-                      Max Players: {editMaxPlayers}
-                    </label>
-                    <input
-                      type="range"
-                      min="2"
-                      max="20"
-                      value={editMaxPlayers}
-                      onChange={(e) => setEditMaxPlayers(parseInt(e.target.value, 10))}
-                      className="w-full"
-                    />
-                  </div>
-
-                  <div className="rounded-2xl border border-zinc-800 bg-zinc-950/30 p-4">
-                    <div className="flex items-center gap-2 text-sm font-semibold">
-                      <Lock size={16} className="text-zinc-400" />
-                      Password
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-[10px] font-black uppercase tracking-widest text-zinc-600 mb-1.5">Difficulty</label>
+                      <select
+                        value={String(editDifficulty)}
+                        onChange={(e) => setEditDifficulty(e.target.value === 'all' ? 'all' : Number(e.target.value))}
+                        className="w-full bg-[#0d1220] border border-white/[0.08] rounded-xl px-4 py-2.5 text-sm text-white outline-none focus:border-indigo-500/50 transition-colors cursor-pointer"
+                      >
+                        <option value="all">All Difficulties</option>
+                        <option value="1">Level 1 — Easy</option>
+                        <option value="2">Level 2</option>
+                        <option value="3">Level 3 — Medium</option>
+                        <option value="4">Level 4</option>
+                        <option value="5">Level 5 — Hard</option>
+                      </select>
                     </div>
 
-                    <label className="block text-xs font-medium text-zinc-400 mt-3 mb-2">
-                      Set new password (leave blank to keep unchanged)
-                    </label>
-                    <input
-                      type="password"
-                      value={editPassword}
-                      onChange={(e) => setEditPassword(e.target.value)}
-                      className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-4 py-2 text-sm outline-none focus:border-blue-500"
-                      placeholder="New password"
-                      autoComplete="new-password"
-                    />
-
-                    <label className="mt-3 flex items-center gap-2 text-xs text-zinc-400">
+                    <div>
+                      <label className="block text-[10px] font-black uppercase tracking-widest text-zinc-600 mb-1.5">
+                        Time / Problem — <span className="text-amber-400 normal-case font-bold">{editSeconds}s</span>
+                      </label>
                       <input
-                        type="checkbox"
-                        checked={clearPassword}
-                        onChange={(e) => setClearPassword(e.target.checked)}
+                        type="range" min="10" max="600" step="10"
+                        value={editSeconds}
+                        onChange={(e) => setEditSeconds(parseInt(e.target.value, 10))}
+                        className="w-full mt-3 accent-indigo-500"
                       />
-                      Clear password (make room public)
-                    </label>
+                    </div>
 
-                    <div className="mt-2 text-xs text-zinc-500">
-                      Current: {hasPassword ? 'Locked' : 'Public'}
+                    <div>
+                      <label className="block text-[10px] font-black uppercase tracking-widest text-zinc-600 mb-1.5">
+                        Max Players — <span className="text-blue-400 normal-case font-bold">{editMaxPlayers}</span>
+                      </label>
+                      <input
+                        type="range" min="2" max="20"
+                        value={editMaxPlayers}
+                        onChange={(e) => setEditMaxPlayers(parseInt(e.target.value, 10))}
+                        className="w-full mt-3 accent-indigo-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-black uppercase tracking-widest text-zinc-600 mb-1.5">New Password</label>
+                      <input
+                        type="password"
+                        value={editPassword}
+                        onChange={(e) => setEditPassword(e.target.value)}
+                        className="w-full bg-white/[0.04] border border-white/[0.08] rounded-xl px-4 py-2.5 text-sm text-white placeholder:text-zinc-700 outline-none focus:border-indigo-500/50 transition-colors"
+                        placeholder="Leave blank to keep current"
+                        autoComplete="new-password"
+                      />
                     </div>
                   </div>
+
+                  <label className="flex items-center gap-2.5 cursor-pointer group">
+                    <input
+                      type="checkbox"
+                      checked={clearPassword}
+                      onChange={(e) => setClearPassword(e.target.checked)}
+                      className="accent-indigo-500 w-3.5 h-3.5"
+                    />
+                    <span className="text-xs text-zinc-500 group-hover:text-zinc-300 transition-colors">
+                      Remove password (make room public)
+                    </span>
+                  </label>
 
                   <button
                     onClick={saveSettings}
                     disabled={saving}
-                    className="w-full bg-blue-600 hover:bg-blue-500 text-white px-4 py-3 rounded-xl font-bold disabled:opacity-50 transition-colors"
+                    className="w-full bg-indigo-600 hover:bg-indigo-500 text-white py-2.5 rounded-xl text-sm font-bold transition-all disabled:opacity-50 active:scale-95"
                   >
-                    {saving ? 'Saving...' : 'Save Settings'}
+                    {saving ? 'Saving…' : 'Save Settings'}
                   </button>
                 </div>
               ) : (
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="bg-zinc-950/50 rounded-xl p-4 border border-zinc-800">
-                    <div className="flex items-center gap-2 text-zinc-400 text-xs mb-1">
-                      <Shield size={14} />
-                      Difficulty
+                /* Settings display */
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  {[
+                    { icon: <Shield size={11} />, label: 'Difficulty', value: difficultyLabel, color: 'text-white' },
+                    { icon: <Clock size={11} />, label: 'Time Limit', value: `${room.secondsPerProblem}s`, color: 'text-amber-400' },
+                    { icon: <Users size={11} />, label: 'Max Players', value: room.maxPlayers, color: 'text-sky-400' },
+                    { icon: <Lock size={11} />, label: 'Access', value: hasPassword ? 'Private' : 'Public', color: 'text-zinc-300' },
+                  ].map(({ icon, label, value, color }) => (
+                    <div key={label} className="bg-white/[0.03] rounded-xl p-4 border border-white/[0.05]">
+                      <div className="text-[9px] uppercase font-black tracking-widest text-zinc-700 flex items-center gap-1 mb-2">
+                        {icon} {label}
+                      </div>
+                      <div className={`text-lg font-black ${color}`}>{value}</div>
                     </div>
-                    <div className="text-2xl font-bold text-white">
-                      {room.difficulty === null ? 'All' : room.difficulty}
-                    </div>
-                  </div>
-
-                  <div className="bg-zinc-950/50 rounded-xl p-4 border border-zinc-800">
-                    <div className="flex items-center gap-2 text-zinc-400 text-xs mb-1">
-                      <Clock size={14} />
-                      Time Limit
-                    </div>
-                    <div className="text-2xl font-bold text-white">{room.secondsPerProblem}s</div>
-                  </div>
-
-                  <div className="bg-zinc-950/50 rounded-xl p-4 border border-zinc-800">
-                    <div className="flex items-center gap-2 text-zinc-400 text-xs mb-1">
-                      <Users size={14} />
-                      Max Players
-                    </div>
-                    <div className="text-2xl font-bold text-white">{room.maxPlayers}</div>
-                  </div>
-
-                  <div className="bg-zinc-950/50 rounded-xl p-4 border border-zinc-800">
-                    <div className="text-zinc-400 text-xs mb-1">Status</div>
-                    <div className="text-lg font-bold text-green-400 capitalize">{room.status}</div>
-                    <div className="mt-1 text-xs text-zinc-500 flex items-center gap-2">
-                      <Lock size={12} className="text-zinc-600" />
-                      {hasPassword ? 'Locked' : 'Public'}
-                    </div>
-                  </div>
+                  ))}
                 </div>
               )}
             </div>
 
-            {/* Ready/Start Controls */}
+            {/* Controls */}
             {room.status === 'lobby' && (
-              <div className="rounded-3xl border border-zinc-800 bg-zinc-900/40 p-6">
-                <div className="flex flex-col md:flex-row gap-4">
+              <div className="rounded-2xl border border-white/[0.07] bg-white/[0.02] p-5 space-y-3">
+                <div className="flex flex-col sm:flex-row gap-3">
+                  {/* Ready toggle */}
                   <button
                     onClick={toggleReady}
                     disabled={toggling}
-                    className={`flex-1 flex items-center justify-center gap-2 px-6 py-4 rounded-2xl font-bold transition-all ${
+                    className={`flex-1 flex items-center justify-center gap-2 py-3.5 rounded-xl font-bold text-sm transition-all disabled:opacity-50 active:scale-95 ${
                       isReady
-                        ? 'bg-green-600 hover:bg-green-500 text-white'
-                        : 'bg-zinc-700 hover:bg-zinc-600 text-white'
-                    } disabled:opacity-50`}
+                        ? 'bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20'
+                        : 'bg-white/[0.04] border border-white/[0.08] text-zinc-400 hover:bg-white/[0.07] hover:text-zinc-200 hover:border-white/[0.12]'
+                    }`}
                   >
-                    {isReady ? <Check size={20} /> : <X size={20} />}
-                    {isReady ? 'Ready' : 'Not Ready'}
+                    {isReady ? <Check size={17} /> : <X size={17} />}
+                    {isReady ? 'Ready!' : 'Click when ready'}
                   </button>
 
                   {isHost && (
                     <button
                       onClick={startMatch}
                       disabled={!canStart || starting}
-                      className="flex-1 flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-6 py-4 rounded-2xl font-bold disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                      className="flex-1 flex items-center justify-center gap-2 py-3.5 rounded-xl font-bold text-sm bg-indigo-600 text-white hover:bg-indigo-500 transition-all disabled:opacity-30 disabled:cursor-not-allowed hover:shadow-[0_0_24px_rgba(99,102,241,0.3)] active:scale-95"
                     >
-                      <Play size={20} />
-                      {starting ? 'Starting...' : 'Start Match'}
+                      <Play size={17} />
+                      {starting ? 'Starting…' : 'Start Match'}
                     </button>
                   )}
                 </div>
 
                 {isHost && !canStart && (
-                  <p className="text-xs text-zinc-500 text-center mt-3">
+                  <p className="text-xs text-zinc-700 text-center">
                     {players.length < 2
-                      ? 'Need at least 2 players'
+                      ? '⚡ Need at least 2 players to start'
                       : !allReady
-                        ? 'All players must be ready'
+                        ? '⏳ Waiting for all players to be ready'
                         : ''}
                   </p>
                 )}
@@ -601,59 +592,74 @@ export default function RoomClient({ roomId }: { roomId: string }) {
             )}
           </div>
 
-          {/* Right: Players List */}
-          <div className="rounded-3xl border border-zinc-800 bg-zinc-900/40 p-6">
-            <h2 className="text-lg font-bold flex items-center gap-2 mb-4">
-              <Users size={20} />
+          {/* ── Right: Players ── */}
+          <div className="rounded-2xl border border-white/[0.07] bg-white/[0.02] p-5 h-fit">
+            <h2 className="text-[10px] font-black uppercase tracking-widest text-zinc-600 flex items-center gap-1.5 mb-4">
+              <Users size={11} />
               Players ({players.length}/{room.maxPlayers})
             </h2>
 
-            <div className="space-y-3">
+            <div className="space-y-2">
               {players.map((p) => {
-                const label = p.email?.trim() ? p.email : `User ${p.userId}`;
+                const label = displayName(p.email, p.userId);
+                const initial = label.charAt(0).toUpperCase();
                 const isThisHost = p.userId === room.hostUserId;
+                const avatarColor = getAvatarColor(p.email ?? String(p.userId));
 
                 return (
                   <div
                     key={p.userId}
-                    className="flex items-center justify-between bg-zinc-950/50 rounded-xl p-3 border border-zinc-800"
+                    className="flex items-center gap-3 bg-white/[0.03] rounded-xl p-3 border border-white/[0.05]"
                   >
-                    <div className="min-w-0">
-                      <div className="text-sm font-medium text-white flex items-center gap-2 min-w-0">
-                        <span className="truncate">{label}</span>
+                    <div className={`w-9 h-9 rounded-full ${avatarColor} flex items-center justify-center text-white text-sm font-black shrink-0`}>
+                      {initial}
+                    </div>
+
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-sm font-semibold text-zinc-200 truncate">{label}</span>
                         {isThisHost && (
-                          <span className="shrink-0 text-[10px] bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded-full font-bold">
+                          <span className="shrink-0 text-[9px] bg-indigo-500/20 text-indigo-400 px-1.5 py-0.5 rounded-md font-black uppercase tracking-wide">
                             HOST
                           </span>
                         )}
-                      </div>
-                      <div className="text-xs text-zinc-500">
-                        Joined{' '}
-                        {p.joinedAt ? new Date(p.joinedAt).toLocaleTimeString() : '—'}
                       </div>
                     </div>
 
                     <div className="shrink-0">
                       {p.isReady ? (
-                        <div className="flex items-center gap-1 text-green-400 text-xs font-bold">
-                          <Check size={14} />
-                          Ready
+                        <div className="flex items-center gap-1 text-emerald-400 text-xs font-bold">
+                          <Check size={12} /> Ready
                         </div>
                       ) : (
-                        <div className="flex items-center gap-1 text-zinc-500 text-xs">
-                          <X size={14} />
-                          Not Ready
+                        <div className="flex items-center gap-1 text-zinc-600 text-xs">
+                          <X size={12} /> Waiting
                         </div>
                       )}
                     </div>
                   </div>
                 );
               })}
+
+              {/* Empty slots */}
+              {Array.from({ length: Math.max(0, room.maxPlayers - players.length) }).map((_, i) => (
+                <div
+                  key={`empty-${i}`}
+                  className="flex items-center gap-3 rounded-xl p-3 border border-dashed border-white/[0.04]"
+                >
+                  <div className="w-9 h-9 rounded-full bg-white/[0.03] border border-dashed border-white/[0.05]" />
+                  <span className="text-xs text-zinc-800 italic">Waiting for player…</span>
+                </div>
+              ))}
             </div>
 
-            {!hasPassword && (
-              <div className="mt-4 text-xs text-zinc-500">Room is public (no password).</div>
-            )}
+            <div className="mt-4 pt-4 border-t border-white/[0.05] flex items-center gap-2 text-xs text-zinc-700">
+              {hasPassword ? (
+                <><Lock size={10} /> Private room</>
+              ) : (
+                <><Globe size={10} /> Public room — anyone can join</>
+              )}
+            </div>
           </div>
         </div>
       </div>

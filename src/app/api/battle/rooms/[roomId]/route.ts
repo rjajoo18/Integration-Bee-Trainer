@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { pool } from "@/lib/db";
 import { requireUserId } from "@/lib/auth";
+import { hashPassword } from "@/lib/battle/password";
 
 export const runtime = "nodejs";
 
@@ -14,68 +15,75 @@ export async function GET(_: Request, ctx: { params: Promise<{ roomId: string }>
 
   const { roomId } = await ctx.params;
 
-  const roomRes = await pool.query(
-    `
-    SELECT 
-      id, 
-      host_user_id, 
-      name, 
-      difficulty, 
-      seconds_per_problem, 
-      max_players, 
-      status,
-      current_match_id,
-      created_at
-    FROM battle_rooms
-    WHERE id = $1
-    `,
-    [roomId]
-  );
+  try {
+    const roomRes = await pool.query(
+      `
+      SELECT
+        id,
+        host_user_id,
+        name,
+        difficulty,
+        seconds_per_problem,
+        max_players,
+        (password_hash IS NOT NULL) AS has_password,
+        status,
+        current_match_id,
+        created_at
+      FROM battle_rooms
+      WHERE id = $1
+      `,
+      [roomId]
+    );
 
-  if (roomRes.rows.length === 0) {
-    return NextResponse.json({ error: "Room not found" }, { status: 404 });
+    if (roomRes.rows.length === 0) {
+      return NextResponse.json({ error: "Room not found" }, { status: 404 });
+    }
+
+    const room = roomRes.rows[0];
+
+    const playersRes = await pool.query(
+      `
+      SELECT
+        brp.user_id,
+        brp.is_ready,
+        brp.joined_at,
+        u.email
+      FROM battle_room_players brp
+      LEFT JOIN users u ON u.id = brp.user_id
+      WHERE brp.room_id = $1
+      ORDER BY brp.joined_at ASC
+      `,
+      [roomId]
+    );
+
+    const isPlayer = playersRes.rows.some((p: any) => Number(p.user_id) === Number(userId));
+
+    return NextResponse.json({
+      room: {
+        id: room.id,
+        hostUserId: room.host_user_id,
+        name: room.name,
+        difficulty: room.difficulty,
+        secondsPerProblem: room.seconds_per_problem,
+        maxPlayers: room.max_players,
+        hasPassword: room.has_password,
+        status: room.status,
+        currentMatchId: room.current_match_id,
+        createdAt: room.created_at?.toISOString() || null,
+      },
+      players: playersRes.rows.map((p: any) => ({
+        userId: p.user_id,
+        email: p.email || null,
+        isReady: p.is_ready,
+        joinedAt: p.joined_at?.toISOString() || null,
+      })),
+      isPlayer,
+      isHost: room.host_user_id === userId,
+    });
+  } catch (e: any) {
+    console.error("Get room error:", e);
+    return NextResponse.json({ error: e?.message ?? "Failed to load room" }, { status: 500 });
   }
-
-  const room = roomRes.rows[0];
-
-  const playersRes = await pool.query(
-    `
-    SELECT 
-      brp.user_id,
-      brp.is_ready,
-      brp.joined_at,
-      u.email
-    FROM battle_room_players brp
-    LEFT JOIN users u ON u.id = brp.user_id
-    WHERE brp.room_id = $1
-    ORDER BY brp.joined_at ASC
-    `,
-    [roomId]
-  );
-
-  const isPlayer = playersRes.rows.some((p: any) => Number(p.user_id) === Number(userId));
-
-  return NextResponse.json({
-    room: {
-      id: room.id,
-      hostUserId: room.host_user_id,
-      name: room.name,
-      difficulty: room.difficulty,
-      secondsPerProblem: room.seconds_per_problem,
-      maxPlayers: room.max_players,
-      status: room.status,
-      currentMatchId: room.current_match_id,
-      createdAt: room.created_at?.toISOString() || null,
-    },
-    players: playersRes.rows.map((p: any) => ({
-      userId: p.user_id,
-      email: p.email || null,
-      isReady: p.is_ready,
-      joinedAt: p.joined_at?.toISOString() || null,
-    })),
-    isPlayer,
-    isHost: room.host_user_id === userId,
-  });
 }
 
 export async function PATCH(req: Request, ctx: { params: Promise<{ roomId: string }> }) {
@@ -119,9 +127,20 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ roomId: strin
     const values: any[] = [];
     let paramCount = 1;
 
+    if (body.name !== undefined) {
+      const name = String(body.name ?? "").slice(0, 80).trim();
+      if (!name) {
+        await client.query("ROLLBACK");
+        return NextResponse.json({ error: "Room name cannot be empty" }, { status: 400 });
+      }
+      updates.push(`name = $${paramCount}`);
+      values.push(name);
+      paramCount++;
+    }
+
     if (body.difficulty !== undefined) {
-      // Allow null for "All difficulties"
-      if (body.difficulty === null) {
+      // Allow null or "all" for "All difficulties"
+      if (body.difficulty === null || body.difficulty === "all" || body.difficulty === "All") {
         updates.push(`difficulty = NULL`);
       } else {
         const diff = Number(body.difficulty);
@@ -137,9 +156,9 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ roomId: strin
 
     if (body.secondsPerProblem !== undefined) {
       const spp = Number(body.secondsPerProblem);
-      if (!Number.isInteger(spp) || spp < 10 || spp > 300) {
+      if (!Number.isInteger(spp) || spp < 10 || spp > 600) {
         await client.query("ROLLBACK");
-        return NextResponse.json({ error: "Seconds per problem must be 10-300" }, { status: 400 });
+        return NextResponse.json({ error: "Seconds per problem must be 10-600" }, { status: 400 });
       }
       updates.push(`seconds_per_problem = $${paramCount}`);
       values.push(spp);
@@ -155,6 +174,19 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ roomId: strin
       updates.push(`max_players = $${paramCount}`);
       values.push(mp);
       paramCount++;
+    }
+
+    // Handle password update (needs hashing)
+    if ("password" in body) {
+      if (body.password === null || body.password === "") {
+        // Clear password
+        updates.push(`password_hash = NULL`);
+      } else {
+        const newHash = await hashPassword(String(body.password));
+        updates.push(`password_hash = $${paramCount}`);
+        values.push(newHash);
+        paramCount++;
+      }
     }
 
     if (updates.length === 0) {
