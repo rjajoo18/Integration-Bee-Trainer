@@ -10,6 +10,7 @@ type Profile = {
   bio: string | null;
   is_public: boolean;
   image: string | null;
+  username: string | null;
 };
 
 export default function ProfilePage() {
@@ -54,6 +55,7 @@ export default function ProfilePage() {
           bio: p.bio,
           isPublic: p.is_public,
           image: p.image,
+          username: p.username || undefined,
         }),
       });
 
@@ -74,6 +76,7 @@ export default function ProfilePage() {
           ...session?.user,
           name: data.name,
           image: data.image,
+          username: data.username,
         },
       });
 
@@ -160,8 +163,11 @@ export default function ProfilePage() {
             className="h-32 w-32 rounded-full object-cover ring-2 ring-blue-500/30 shadow-[0_0_30px_rgba(59,130,246,0.3)] mx-auto mb-6"
           />
           <h1 className="text-5xl font-extrabold tracking-tight bg-gradient-to-b from-white to-gray-400 bg-clip-text text-transparent mb-2">
-            {p.name ?? "Your Profile"}
+            {p.name ?? p.username ?? "Your Profile"}
           </h1>
+          {p.username && (
+            <div className="text-indigo-400 font-mono text-sm mb-1">@{p.username}</div>
+          )}
           <div className="text-gray-400 font-mono text-sm">{p.email}</div>
         </div>
 
@@ -201,6 +207,46 @@ export default function ProfilePage() {
                   setProfile((prev) => (prev ? { ...prev, name: e.target.value } : prev))
                 }
               />
+            </div>
+
+            {/* Username */}
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-3">
+                Username{" "}
+                <span className="text-gray-600 font-normal text-xs">— shown in battles</span>
+              </label>
+              <input
+                className="w-full rounded-xl border border-gray-700 bg-[#0d1117] px-4 py-3
+                  text-white placeholder:text-gray-600 font-mono tracking-wide
+                  focus:border-blue-500/60 focus:ring-2 focus:ring-blue-500/20
+                  outline-none transition"
+                placeholder="your_username"
+                value={p.username ?? ""}
+                onChange={(e) =>
+                  setProfile((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          username: e.target.value
+                            .toLowerCase()
+                            .replace(/[^a-z0-9_]/g, "")
+                            .slice(0, 20),
+                        }
+                      : prev,
+                  )
+                }
+                maxLength={20}
+                spellCheck={false}
+                autoComplete="username"
+              />
+              {p.username !== null && p.username !== "" && p.username.length < 3 && (
+                <p className="text-xs text-red-400 mt-1.5 pl-1">At least 3 characters required</p>
+              )}
+              {!p.username && (
+                <p className="text-xs text-gray-600 mt-1.5 pl-1">
+                  Set a username to be identified in battles
+                </p>
+              )}
             </div>
 
             {/* Bio */}

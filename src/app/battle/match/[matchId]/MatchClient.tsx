@@ -17,7 +17,7 @@ type MatchState = {
     cooldownStartsAt: string | null;
     cooldownEndsAt: string | null;
   };
-  players: { userId: number; score: number; email?: string | null; lastSubmitAt?: string | null; eloRating?: number | null }[];
+  players: { userId: number; score: number; username?: string | null; lastSubmitAt?: string | null; eloRating?: number | null }[];
   currentProblem: null | {
     id: string;
     latex: string | null;
@@ -50,9 +50,9 @@ function formatTime(msLeft: number): string {
   return String(Math.ceil(ms / 1000));
 }
 
-function displayName(email: string | null | undefined, userId: number): string {
-  if (!email?.trim()) return `Player ${userId}`;
-  return email.includes('@') ? email.split('@')[0] : email;
+function displayName(username: string | null | undefined, userId: number): string {
+  if (!username?.trim()) return `Player ${userId}`;
+  return username;
 }
 
 export default function MatchClient({ matchId }: { matchId: string }) {
@@ -233,7 +233,7 @@ export default function MatchClient({ matchId }: { matchId: string }) {
     const wId = state.match.winnerUserId;
     if (!wId) return null;
     const p = state.players.find((p) => p.userId === wId);
-    return displayName(p?.email, wId);
+    return displayName(p?.username, wId);
   }, [finished, state]);
 
   const sortedPlayers = useMemo(
@@ -497,9 +497,9 @@ export default function MatchClient({ matchId }: { matchId: string }) {
 
               <div className="space-y-3">
                 {sortedPlayers.map((p, i) => {
-                  const label = displayName(p.email, p.userId);
+                  const label = displayName(p.username, p.userId);
                   const initial = label.charAt(0).toUpperCase();
-                  const avatarColor = getAvatarColor(p.email ?? String(p.userId));
+                  const avatarColor = getAvatarColor(p.username ?? String(p.userId));
                   const isWinner = finished && p.userId === state?.match?.winnerUserId;
                   const isLeading = !finished && i === 0 && p.score > 0;
 

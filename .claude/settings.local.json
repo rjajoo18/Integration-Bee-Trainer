@@ -8,7 +8,8 @@
       "Bash(cd C:\\\\College\\\\Projects\\\\Integration Bee Trainer:*)",
       "Bash(head:*)",
       "Bash(grep:*)",
-      "Bash(test:*)"
+      "Bash(test:*)",
+      "Bash(tail:*)"
     ]
   }
 }

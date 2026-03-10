@@ -47,7 +47,7 @@ export async function GET(_: Request, ctx: { params: Promise<{ roomId: string }>
         brp.user_id,
         brp.is_ready,
         brp.joined_at,
-        u.email
+        COALESCE(u.username, split_part(u.email, '@', 1)) AS username
       FROM battle_room_players brp
       LEFT JOIN users u ON u.id = brp.user_id
       WHERE brp.room_id = $1
@@ -73,7 +73,7 @@ export async function GET(_: Request, ctx: { params: Promise<{ roomId: string }>
       },
       players: playersRes.rows.map((p: any) => ({
         userId: p.user_id,
-        email: p.email || null,
+        username: p.username || null,
         isReady: p.is_ready,
         joinedAt: p.joined_at?.toISOString() || null,
       })),

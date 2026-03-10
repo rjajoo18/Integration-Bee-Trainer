@@ -23,7 +23,7 @@ type RoomState = {
   };
   players: Array<{
     userId: number;
-    email: string | null;
+    username: string | null;
     isReady: boolean;
     joinedAt: string | null;
   }>;
@@ -44,9 +44,9 @@ function getAvatarColor(str: string) {
   return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
 }
 
-function displayName(email: string | null, userId: number): string {
-  if (!email?.trim()) return `Player ${userId}`;
-  return email.includes('@') ? email.split('@')[0] : email;
+function displayName(username: string | null | undefined, userId: number): string {
+  if (!username?.trim()) return `Player ${userId}`;
+  return username;
 }
 
 export default function RoomClient({ roomId }: { roomId: string }) {
@@ -601,10 +601,10 @@ export default function RoomClient({ roomId }: { roomId: string }) {
 
             <div className="space-y-2">
               {players.map((p) => {
-                const label = displayName(p.email, p.userId);
+                const label = displayName(p.username, p.userId);
                 const initial = label.charAt(0).toUpperCase();
                 const isThisHost = p.userId === room.hostUserId;
-                const avatarColor = getAvatarColor(p.email ?? String(p.userId));
+                const avatarColor = getAvatarColor(p.username ?? String(p.userId));
 
                 return (
                   <div

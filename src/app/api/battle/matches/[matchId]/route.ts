@@ -43,7 +43,9 @@ export async function GET(_: Request, ctx: { params: Promise<{ matchId: string }
       const match = matchRes.rows[0];
 
       const playersRes = await client.query(
-        `SELECT bmp.user_id, bmp.score, bmp.last_submit_at, u.email, u.elo_rating
+        `SELECT bmp.user_id, bmp.score, bmp.last_submit_at,
+                COALESCE(u.username, split_part(u.email, '@', 1)) AS username,
+                u.elo_rating
          FROM battle_match_players bmp
          LEFT JOIN users u ON u.id = bmp.user_id
          WHERE bmp.match_id = $1
@@ -122,7 +124,7 @@ export async function GET(_: Request, ctx: { params: Promise<{ matchId: string }
         },
         players: playersRes.rows.map((p: any) => ({
           userId: p.user_id,
-          email: p.email || null,
+          username: p.username || null,
           score: p.score,
           lastSubmitAt: toIsoString(p.last_submit_at),
           eloRating: p.elo_rating != null ? Number(p.elo_rating) : null,

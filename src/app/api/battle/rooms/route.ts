@@ -20,7 +20,7 @@ export async function GET() {
         r.status,
         r.created_at,
         r.host_user_id,
-        COALESCE(u.email, 'Unknown') AS host_name,
+        COALESCE(u.username, split_part(u.email, '@', 1), 'Unknown') AS host_name,
         COALESCE(p.cnt, 0) AS player_count
       FROM battle_rooms r
       LEFT JOIN users u ON u.id = r.host_user_id
