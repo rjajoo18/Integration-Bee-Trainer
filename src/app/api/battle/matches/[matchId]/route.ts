@@ -45,12 +45,16 @@ export async function GET(_: Request, ctx: { params: Promise<{ matchId: string }
       const playersRes = await client.query(
         `SELECT bmp.user_id, bmp.score, bmp.last_submit_at,
                 COALESCE(u.username, split_part(u.email, '@', 1)) AS username,
-                u.elo_rating
+                u.elo_rating,
+                EXISTS(
+                  SELECT 1 FROM battle_room_players brp
+                  WHERE brp.room_id = $2 AND brp.user_id = bmp.user_id
+                ) AS is_in_room
          FROM battle_match_players bmp
          LEFT JOIN users u ON u.id = bmp.user_id
          WHERE bmp.match_id = $1
          ORDER BY bmp.score DESC, bmp.user_id ASC`,
-        [matchId]
+        [matchId, match.room_id]
       );
 
       const isPlayer = playersRes.rows.some((p: any) => Number(p.user_id) === Number(userId));
@@ -128,6 +132,7 @@ export async function GET(_: Request, ctx: { params: Promise<{ matchId: string }
           score: p.score,
           lastSubmitAt: toIsoString(p.last_submit_at),
           eloRating: p.elo_rating != null ? Number(p.elo_rating) : null,
+          isInRoom: Boolean(p.is_in_room),
         })),
         currentProblem,
         problemEndsAt,
@@ -152,7 +157,7 @@ async function advanceStateIfNeeded(client: any, matchId: string): Promise<void>
   const now = new Date();
 
   const checkRes = await client.query(
-    `SELECT id, current_phase, cooldown_ends_at
+    `SELECT id, room_id, current_phase, cooldown_ends_at
      FROM battle_matches
      WHERE id = $1 AND status = 'in_game'
      FOR UPDATE SKIP LOCKED`,
@@ -192,6 +197,45 @@ async function advanceStateIfNeeded(client: any, matchId: string): Promise<void>
     const endsAt = new Date(round.ends_at);
 
     if (match.current_phase === "in_game" && !round.ended_reason && endsAt <= now) {
+      const nextRoundIndex = Number(round.round_index) + 1;
+
+      // 10-problem cap: end the match after the last round expires
+      if (nextRoundIndex >= 10) {
+        await client.query(
+          `UPDATE battle_match_rounds SET ended_reason = 'time_expired'
+           WHERE match_id = $1 AND round_index = $2`,
+          [matchId, round.round_index]
+        );
+
+        const scoresRes = await client.query(
+          `SELECT user_id, score FROM battle_match_players WHERE match_id = $1 ORDER BY score DESC`,
+          [matchId]
+        );
+
+        let winnerId: any = null;
+        if (scoresRes.rows.length >= 2 && Number(scoresRes.rows[0].score) > Number(scoresRes.rows[1].score)) {
+          winnerId = scoresRes.rows[0].user_id;
+        } else if (scoresRes.rows.length === 1) {
+          winnerId = scoresRes.rows[0].user_id;
+        }
+
+        await client.query(
+          `UPDATE battle_matches
+           SET status = 'finished', current_phase = 'finished',
+               winner_user_id = $2, ended_at = now(),
+               cooldown_starts_at = NULL, cooldown_ends_at = NULL
+           WHERE id = $1`,
+          [matchId, winnerId]
+        );
+
+        await client.query(
+          `UPDATE battle_rooms SET status = 'finished' WHERE id = $1`,
+          [match.room_id]
+        );
+
+        return;
+      }
+
       const cooldownStartsAt = now;
       const cooldownEndsAt = new Date(now.getTime() + 5000);
 
@@ -211,7 +255,6 @@ async function advanceStateIfNeeded(client: any, matchId: string): Promise<void>
         [matchId, round.round_index]
       );
 
-      const nextRoundIndex = Number(round.round_index) + 1;
       const nextStartsAt = cooldownEndsAt;
 
       const matchData = await client.query(

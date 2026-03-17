@@ -193,8 +193,48 @@ export async function POST(req: Request, ctx: { params: Promise<{ matchId: strin
         // All players got it wrong — enter cooldown immediately and queue the next
         // problem, exactly as advanceStateIfNeeded does on timer expiry.
         const now = new Date();
-        const cooldownEndsAt = new Date(now.getTime() + COOLDOWN_SECONDS * 1000);
         const nextRoundIndex = Number(round.round_index) + 1;
+
+        // Mark the round as ended so advanceStateIfNeeded ignores it on future GETs
+        await client.query(
+          `UPDATE battle_match_rounds SET ended_reason='all_wrong'
+           WHERE match_id=$1 AND round_index=$2`,
+          [matchId, round.round_index]
+        );
+
+        // 10-problem cap: if all players got the last problem wrong, end match by score
+        if (nextRoundIndex >= 10) {
+          const scoresRes = await client.query(
+            `SELECT user_id, score FROM battle_match_players WHERE match_id=$1 ORDER BY score DESC`,
+            [matchId]
+          );
+          let winnerId: any = null;
+          if (scoresRes.rows.length >= 2 && Number(scoresRes.rows[0].score) > Number(scoresRes.rows[1].score)) {
+            winnerId = scoresRes.rows[0].user_id;
+          } else if (scoresRes.rows.length === 1) {
+            winnerId = scoresRes.rows[0].user_id;
+          }
+          await client.query(
+            `UPDATE battle_matches
+             SET status='finished', current_phase='finished', winner_user_id=$2, ended_at=now(),
+                 cooldown_starts_at=NULL, cooldown_ends_at=NULL
+             WHERE id=$1`,
+            [matchId, winnerId]
+          );
+          await client.query(`UPDATE battle_rooms SET status='finished' WHERE id=$1`, [m.room_id]);
+          await client.query("COMMIT");
+          return NextResponse.json({
+            correct: false,
+            locked: true,
+            allWrong: true,
+            matchEnded: true,
+            draw: winnerId === null,
+            winnerUserId: winnerId,
+            message: "All players got it wrong — match over (10 problems reached).",
+          });
+        }
+
+        const cooldownEndsAt = new Date(now.getTime() + COOLDOWN_SECONDS * 1000);
         const nextEndsAt = new Date(cooldownEndsAt.getTime() + Number(m.seconds_per_problem) * 1000);
 
         // Transition match to cooldown so the frontend shows the countdown overlay
@@ -203,13 +243,6 @@ export async function POST(req: Request, ctx: { params: Promise<{ matchId: strin
            SET current_phase='cooldown', cooldown_starts_at=$2, cooldown_ends_at=$3
            WHERE id=$1`,
           [matchId, now.toISOString(), cooldownEndsAt.toISOString()]
-        );
-
-        // Mark the round as ended so advanceStateIfNeeded ignores it on future GETs
-        await client.query(
-          `UPDATE battle_match_rounds SET ended_reason='all_wrong'
-           WHERE match_id=$1 AND round_index=$2`,
-          [matchId, round.round_index]
         );
 
         // Pick an unused problem for the next round
@@ -366,6 +399,35 @@ export async function POST(req: Request, ctx: { params: Promise<{ matchId: strin
     const nextStartsAt = cooldownUntil;
     const nextEndsAt = new Date(nextStartsAt.getTime() + Number(m.seconds_per_problem) * 1000);
     const nextRoundIndex = Number(round.round_index) + 1;
+
+    // 10-problem cap: end match by score if this was the last allowed problem
+    if (nextRoundIndex >= 10) {
+      const scoresRes = await client.query(
+        `SELECT user_id, score FROM battle_match_players WHERE match_id=$1 ORDER BY score DESC`,
+        [matchId]
+      );
+      let winnerId: any = null;
+      if (scoresRes.rows.length >= 2 && Number(scoresRes.rows[0].score) > Number(scoresRes.rows[1].score)) {
+        winnerId = scoresRes.rows[0].user_id;
+      } else if (scoresRes.rows.length === 1) {
+        winnerId = scoresRes.rows[0].user_id;
+      }
+      await client.query(
+        `UPDATE battle_matches
+         SET status='finished', current_phase='finished', winner_user_id=$2, ended_at=now()
+         WHERE id=$1`,
+        [matchId, winnerId]
+      );
+      await client.query(`UPDATE battle_rooms SET status='finished' WHERE id=$1`, [m.room_id]);
+      await client.query("COMMIT");
+      return NextResponse.json({
+        correct: true,
+        newScore,
+        matchEnded: true,
+        draw: winnerId === null,
+        winnerUserId: winnerId,
+      });
+    }
 
     const existingNext = await client.query(
       `SELECT 1 FROM battle_match_rounds WHERE match_id=$1 AND round_index=$2 LIMIT 1`,

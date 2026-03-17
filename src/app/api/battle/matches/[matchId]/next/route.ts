@@ -64,6 +64,12 @@ export async function POST(_: Request, ctx: { params: Promise<{ matchId: string 
     );
     const nextRoundIdx = Number(lastRound.rows[0].mx) + 1;
 
+    // 10-problem cap
+    if (nextRoundIdx >= 10) {
+      await client.query("ROLLBACK");
+      return NextResponse.json({ error: "Match has reached the maximum of 10 problems" }, { status: 400 });
+    }
+
     // CRITICAL: Select problem where id is TEXT (like "MIT-2010-Q22"), not UUID
     const problemRes = await client.query(
       `

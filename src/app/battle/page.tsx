@@ -1,8 +1,10 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useSession } from "next-auth/react";
+import { useRouter } from "next/navigation";
 import {
-  Shield, Users, Clock, Lock, Swords, Search, RefreshCw,
+  Lock, Swords, Search, RefreshCw,
   Plus, ChevronRight, X, Zap, Globe,
 } from "lucide-react";
 
@@ -19,15 +21,18 @@ type Room = {
   createdAt: string;
 };
 
-function clampInt(v: string, min: number, max: number, fallback: number) {
-  const n = Number.parseInt(v, 10);
-  if (Number.isNaN(n)) return fallback;
-  return Math.max(min, Math.min(max, n));
-}
-
 const DIFF_COLOR = ["text-zinc-500", "text-emerald-400", "text-sky-400", "text-amber-400", "text-orange-400", "text-red-400"];
 
 export default function BattleLobbyPage() {
+  const { status } = useSession();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (status === "unauthenticated") {
+      router.push("/auth");
+    }
+  }, [status, router]);
+
   const [name, setName] = useState("Integral Duel");
   const [difficulty, setDifficulty] = useState<string | number>("all");
   const [secondsPerProblem, setSecondsPerProblem] = useState(60);
@@ -45,7 +50,6 @@ export default function BattleLobbyPage() {
   const [actionErr, setActionErr] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
 
-  // Password join modal
   const [joinPasswordRoom, setJoinPasswordRoom] = useState<Room | null>(null);
   const [joinPassword, setJoinPassword] = useState("");
   const [joining, setJoining] = useState(false);
@@ -137,8 +141,15 @@ export default function BattleLobbyPage() {
     }
   }
 
-  const totalPlayers = rooms.reduce((s, r) => s + r.playerCount, 0);
-  const openCount = rooms.filter((r) => r.status === "lobby" && r.playerCount < r.maxPlayers).length;
+  if (status === "loading") {
+    return (
+      <div className="min-h-screen bg-[#080c14] flex items-center justify-center">
+        <div className="h-8 w-8 rounded-full border-2 border-indigo-500 border-t-transparent animate-spin" />
+      </div>
+    );
+  }
+
+  if (status === "unauthenticated") return null;
 
   return (
     <div className="min-h-screen bg-[#080c14] text-white">
@@ -191,143 +202,122 @@ export default function BattleLobbyPage() {
         </div>
       )}
 
-      {/* Hero Header */}
-      <div className="relative overflow-hidden border-b border-white/[0.05]">
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_60%_at_50%_-20%,rgba(99,102,241,0.1),transparent)]" />
-        <div className="relative mx-auto max-w-6xl px-6 pt-10 pb-8">
-          <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-6">
-            <div>
-              <div className="flex items-center gap-2 mb-3">
-                <div className="h-px w-6 bg-indigo-500/60" />
-                <span className="text-[10px] font-black uppercase tracking-[0.2em] text-indigo-400">Multiplayer Arena</span>
+      {/* Header */}
+      <div className="mx-auto max-w-6xl px-6 pt-10 pb-6 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <h1 className="text-3xl font-semibold text-white">Integral Battles</h1>
+        </div>
+        <button
+          onClick={() => setShowCreate(!showCreate)}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-sm transition-all active:scale-95 ${
+            showCreate
+              ? "bg-white/[0.06] border border-white/[0.08] text-zinc-300"
+              : "bg-indigo-600 hover:bg-indigo-500 text-white"
+          }`}
+        >
+          {showCreate ? <X size={15} /> : <Plus size={15} />}
+          {showCreate ? "Cancel" : "New Room"}
+        </button>
+      </div>
+
+      {/* Create Room Panel */}
+      <div className="mx-auto max-w-6xl px-6">
+        {showCreate && (
+          <div className="mb-6 rounded-2xl border border-white/[0.08] bg-white/[0.025] p-6">
+            <h3 className="text-[10px] font-black uppercase tracking-widest text-zinc-600 mb-5">
+              Room Configuration
+            </h3>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+              <div className="sm:col-span-2 xl:col-span-4">
+                <label className="block text-[10px] font-black uppercase tracking-widest text-zinc-600 mb-1.5">
+                  Room Name
+                </label>
+                <input
+                  className="w-full bg-white/[0.04] border border-white/[0.08] rounded-xl px-4 py-2.5 text-sm text-white placeholder:text-zinc-700 outline-none focus:border-indigo-500/50 transition-colors"
+                  placeholder="e.g. Speed Integration Duel"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                />
               </div>
-              <h1 className="text-4xl font-black tracking-tight flex items-center gap-3 mb-2">
-                <Swords className="text-indigo-500" size={34} />
-                Integral Battles
-              </h1>
-              <p className="text-sm text-zinc-500">Compete in real-time integral solving duels.</p>
+
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-zinc-600 mb-1.5">
+                  Difficulty
+                </label>
+                <select
+                  className="w-full bg-[#0d1220] border border-white/[0.08] rounded-xl px-4 py-2.5 text-sm text-white outline-none focus:border-indigo-500/50 transition-colors cursor-pointer"
+                  value={difficulty}
+                  onChange={(e) => setDifficulty(e.target.value === "all" ? "all" : Number(e.target.value))}
+                >
+                  <option value="all">All Difficulties</option>
+                  <option value="1">Level 1</option>
+                  <option value="2">Level 2</option>
+                  <option value="3">Level 3</option>
+                  <option value="4">Level 4</option>
+                  <option value="5">Level 5</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-zinc-600 mb-1.5">
+                  Time / Problem — <span className="text-amber-400 normal-case font-bold">{secondsPerProblem}s</span>
+                </label>
+                <input
+                  type="range" min="10" max="300" step="10"
+                  value={secondsPerProblem}
+                  onChange={(e) => setSecondsPerProblem(Number(e.target.value))}
+                  className="w-full mt-2 accent-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-zinc-600 mb-1.5">
+                  Max Players — <span className="text-blue-400 normal-case font-bold">{maxPlayers}</span>
+                </label>
+                <input
+                  type="range" min="2" max="10"
+                  value={maxPlayers}
+                  onChange={(e) => setMaxPlayers(Number(e.target.value))}
+                  className="w-full mt-2 accent-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-zinc-600 mb-1.5">
+                  Password <span className="normal-case font-normal text-zinc-700">(optional)</span>
+                </label>
+                <input
+                  type="password"
+                  className="w-full bg-white/[0.04] border border-white/[0.08] rounded-xl px-4 py-2.5 text-sm text-white placeholder:text-zinc-700 outline-none focus:border-indigo-500/50 transition-colors"
+                  placeholder="Leave blank for public"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                />
+              </div>
             </div>
 
-            <div className="flex items-center gap-3 flex-wrap">
-              <div className="rounded-xl bg-white/[0.04] border border-white/[0.06] px-5 py-3">
-                <div className="text-[11px] font-black uppercase tracking-widest text-zinc-500 mb-1">Open Rooms</div>
-                <div className="text-2xl font-black">{openCount}</div>
+            {actionErr && (
+              <div className="mt-4 rounded-xl bg-red-950/30 border border-red-900/30 px-4 py-3 text-xs text-red-300">
+                {actionErr}
               </div>
-              <div className="rounded-xl bg-white/[0.04] border border-white/[0.06] px-5 py-3">
-                <div className="text-[11px] font-black uppercase tracking-widest text-zinc-500 mb-1">Players Online</div>
-                <div className="text-2xl font-black text-emerald-400">{totalPlayers}</div>
-              </div>
+            )}
+
+            <div className="mt-5 flex justify-end">
               <button
-                onClick={() => setShowCreate(!showCreate)}
-                className={`flex items-center gap-2 px-5 py-3 rounded-xl font-bold text-sm transition-all active:scale-95 ${
-                  showCreate
-                    ? "bg-white/[0.06] border border-white/[0.08] text-zinc-300"
-                    : "bg-indigo-600 hover:bg-indigo-500 text-white hover:shadow-[0_0_20px_rgba(99,102,241,0.35)]"
-                }`}
+                onClick={createRoom}
+                disabled={creating}
+                className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-2.5 rounded-xl font-bold text-sm transition-all hover:shadow-[0_0_20px_rgba(99,102,241,0.35)] active:scale-95 disabled:opacity-50"
               >
-                {showCreate ? <X size={16} /> : <Plus size={16} />}
-                {showCreate ? "Cancel" : "New Room"}
+                {creating ? "Creating..." : "Create & Enter"}
               </button>
             </div>
           </div>
-
-          {/* Create Room Panel */}
-          {showCreate && (
-            <div className="mt-6 rounded-2xl border border-white/[0.08] bg-white/[0.025] p-6">
-              <h3 className="text-[10px] font-black uppercase tracking-widest text-zinc-600 mb-5">Room Configuration</h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-                <div className="sm:col-span-2 xl:col-span-4">
-                  <label className="block text-[10px] font-black uppercase tracking-widest text-zinc-600 mb-1.5">
-                    Room Name
-                  </label>
-                  <input
-                    className="w-full bg-white/[0.04] border border-white/[0.08] rounded-xl px-4 py-2.5 text-sm text-white placeholder:text-zinc-700 outline-none focus:border-indigo-500/50 transition-colors"
-                    placeholder="e.g. Speed Integration Duel"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-[10px] font-black uppercase tracking-widest text-zinc-600 mb-1.5">
-                    Difficulty
-                  </label>
-                  <select
-                    className="w-full bg-[#0d1220] border border-white/[0.08] rounded-xl px-4 py-2.5 text-sm text-white outline-none focus:border-indigo-500/50 transition-colors cursor-pointer"
-                    value={difficulty}
-                    onChange={(e) => setDifficulty(e.target.value === "all" ? "all" : Number(e.target.value))}
-                  >
-                    <option value="all">All Difficulties</option>
-                    <option value="1">Level 1 — Easy</option>
-                    <option value="2">Level 2</option>
-                    <option value="3">Level 3 — Medium</option>
-                    <option value="4">Level 4</option>
-                    <option value="5">Level 5 — Hard</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-[10px] font-black uppercase tracking-widest text-zinc-600 mb-1.5">
-                    Time / Problem — <span className="text-amber-400 normal-case font-bold">{secondsPerProblem}s</span>
-                  </label>
-                  <input
-                    type="range" min="10" max="300" step="10"
-                    value={secondsPerProblem}
-                    onChange={(e) => setSecondsPerProblem(Number(e.target.value))}
-                    className="w-full mt-2 accent-indigo-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-[10px] font-black uppercase tracking-widest text-zinc-600 mb-1.5">
-                    Max Players — <span className="text-blue-400 normal-case font-bold">{maxPlayers}</span>
-                  </label>
-                  <input
-                    type="range" min="2" max="10"
-                    value={maxPlayers}
-                    onChange={(e) => setMaxPlayers(Number(e.target.value))}
-                    className="w-full mt-2 accent-indigo-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-[10px] font-black uppercase tracking-widest text-zinc-600 mb-1.5">
-                    Password <span className="normal-case font-normal text-zinc-700">(optional)</span>
-                  </label>
-                  <input
-                    type="password"
-                    className="w-full bg-white/[0.04] border border-white/[0.08] rounded-xl px-4 py-2.5 text-sm text-white placeholder:text-zinc-700 outline-none focus:border-indigo-500/50 transition-colors"
-                    placeholder="Leave blank for public"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                  />
-                </div>
-              </div>
-
-              {actionErr && (
-                <div className="mt-4 rounded-xl bg-red-950/30 border border-red-900/30 px-4 py-3 text-xs text-red-300">
-                  {actionErr}
-                </div>
-              )}
-
-              <div className="mt-5 flex justify-end">
-                <button
-                  onClick={createRoom}
-                  disabled={creating}
-                  className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-2.5 rounded-xl font-bold text-sm transition-all hover:shadow-[0_0_20px_rgba(99,102,241,0.35)] active:scale-95 disabled:opacity-50"
-                >
-                  {creating ? <RefreshCw size={14} className="animate-spin" /> : <Zap size={14} />}
-                  {creating ? "Creating..." : "Create & Enter"}
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
+        )}
       </div>
 
       {/* Room List */}
-      <div className="mx-auto max-w-6xl px-6 py-8">
-        {/* Search + Filters */}
+      <div className="mx-auto max-w-6xl px-6 pb-12">
         <div className="flex items-center gap-3 mb-6 flex-wrap">
           <div className="relative flex-1 min-w-[200px]">
             <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-600" />
@@ -365,7 +355,7 @@ export default function BattleLobbyPage() {
           </div>
         )}
 
-        {(!joinPasswordRoom && actionErr) && (
+        {!joinPasswordRoom && actionErr && (
           <div className="mb-5 rounded-xl bg-red-950/20 border border-red-900/30 px-4 py-3 text-xs text-red-300 flex items-center gap-2">
             <X size={13} /> {actionErr}
           </div>
@@ -377,7 +367,6 @@ export default function BattleLobbyPage() {
           </span>
         </div>
 
-        {/* Cards */}
         <div className="space-y-2">
           {filtered.map((room) => {
             const isFull = room.playerCount >= room.maxPlayers;
@@ -395,7 +384,6 @@ export default function BattleLobbyPage() {
                 }`}
               >
                 <div className="flex items-center justify-between px-5 py-4 gap-4">
-                  {/* Left: name + meta */}
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 mb-1 flex-wrap">
                       <span className="font-bold text-white truncate">{room.name}</span>
@@ -417,7 +405,6 @@ export default function BattleLobbyPage() {
                     </div>
                   </div>
 
-                  {/* Stats */}
                   <div className="hidden md:flex items-center gap-6 shrink-0 pr-6 border-r border-white/[0.05]">
                     <div className="text-center">
                       <div className="text-[9px] uppercase font-black tracking-widest text-zinc-700 mb-0.5">Difficulty</div>
@@ -437,7 +424,6 @@ export default function BattleLobbyPage() {
                     </div>
                   </div>
 
-                  {/* Join Button */}
                   <button
                     onClick={() => !disabled && openJoin(room)}
                     disabled={disabled}
@@ -456,7 +442,6 @@ export default function BattleLobbyPage() {
 
           {!loadingRooms && filtered.length === 0 && (
             <div className="rounded-2xl border border-dashed border-white/[0.05] p-16 text-center">
-              <Swords size={36} className="mx-auto text-zinc-800 mb-3" />
               <p className="text-sm text-zinc-700">No rooms found. Create one to get started!</p>
             </div>
           )}

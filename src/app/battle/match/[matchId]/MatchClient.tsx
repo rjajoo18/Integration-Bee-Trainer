@@ -3,7 +3,9 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import "katex/dist/katex.min.css";
 import { BlockMath } from "react-katex";
-import { ArrowLeft, Trophy, Lock, CheckCircle2, XCircle, AlertTriangle } from "lucide-react";
+import { useSession } from "next-auth/react";
+import { useRouter } from "next/navigation";
+import { ArrowLeft, Trophy, Lock, CheckCircle2, XCircle, AlertTriangle, UserMinus } from "lucide-react";
 
 type MatchState = {
   match: {
@@ -17,7 +19,14 @@ type MatchState = {
     cooldownStartsAt: string | null;
     cooldownEndsAt: string | null;
   };
-  players: { userId: number; score: number; username?: string | null; lastSubmitAt?: string | null; eloRating?: number | null }[];
+  players: {
+    userId: number;
+    score: number;
+    username?: string | null;
+    lastSubmitAt?: string | null;
+    eloRating?: number | null;
+    isInRoom?: boolean;
+  }[];
   currentProblem: null | {
     id: string;
     latex: string | null;
@@ -56,6 +65,9 @@ function displayName(username: string | null | undefined, userId: number): strin
 }
 
 export default function MatchClient({ matchId }: { matchId: string }) {
+  const { status: authStatus } = useSession();
+  const router = useRouter();
+
   const [state, setState] = useState<MatchState | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [matchClosed, setMatchClosed] = useState(false);
@@ -69,8 +81,38 @@ export default function MatchClient({ matchId }: { matchId: string }) {
 
   // Tracks which problem ID we have already initialized state for, to detect round transitions.
   const seenProblemIdRef = useRef<string | null>(null);
+  // Used by cleanup to avoid calling leave if match finished normally.
+  const matchFinishedRef = useRef(false);
+  const matchClosedRef = useRef(false);
+  const roomIdRef = useRef<string | null>(null);
 
   const validMatchId = UUID_RE.test(matchId);
+
+  // Auth redirect
+  useEffect(() => {
+    if (authStatus === "unauthenticated") {
+      router.push("/auth");
+    }
+  }, [authStatus, router]);
+
+  // Keep roomId ref in sync so cleanup can use it
+  useEffect(() => {
+    if (state?.match?.roomId) {
+      roomIdRef.current = state.match.roomId;
+    }
+    if (state?.match?.status === "finished") {
+      matchFinishedRef.current = true;
+    }
+  }, [state?.match?.roomId, state?.match?.status]);
+
+  // Leave room when navigating away from an in-progress match
+  useEffect(() => {
+    return () => {
+      if (!matchFinishedRef.current && !matchClosedRef.current && roomIdRef.current) {
+        fetch(`/api/battle/rooms/${roomIdRef.current}/leave`, { method: "POST" }).catch(() => {});
+      }
+    };
+  }, []);
 
   async function load() {
     if (!validMatchId) return;
@@ -78,6 +120,7 @@ export default function MatchClient({ matchId }: { matchId: string }) {
 
     if (r.status === 404) {
       setMatchClosed(true);
+      matchClosedRef.current = true;
       setState(null);
       return;
     }
@@ -213,7 +256,7 @@ export default function MatchClient({ matchId }: { matchId: string }) {
       if ((j as any).correct) {
         setFeedback({
           type: "ok",
-          msg: (j as any).matchEnded ? "Correct — you won the match!" : "Correct! Next problem in a moment...",
+          msg: (j as any).matchEnded ? "Correct — match over!" : "Correct! Next problem in a moment...",
         });
         setAnswer("");
       } else {
@@ -236,10 +279,20 @@ export default function MatchClient({ matchId }: { matchId: string }) {
     return displayName(p?.username, wId);
   }, [finished, state]);
 
+  const isDraw = useMemo(() => {
+    return finished && !!state && state.match.winnerUserId === null;
+  }, [finished, state]);
+
   const sortedPlayers = useMemo(
     () => [...(state?.players ?? [])].sort((a, b) => b.score - a.score),
     [state?.players]
   );
+
+  // Players who have left the room mid-match (only meaningful while match is in progress)
+  const leftPlayers = useMemo(() => {
+    if (!state || state.match.status === "finished") return [];
+    return state.players.filter((p) => p.isInRoom === false);
+  }, [state]);
 
   const roundIndex = (state?.currentProblem?.roundIndex ?? 0) + 1;
 
@@ -308,7 +361,7 @@ export default function MatchClient({ matchId }: { matchId: string }) {
               <span className="text-xs font-bold uppercase tracking-widest text-zinc-500">Next Problem Loading…</span>
             ) : state?.currentProblem ? (
               <span className="text-xs font-black uppercase tracking-widest text-zinc-500">
-                Problem {roundIndex}
+                Problem {roundIndex} / 10
               </span>
             ) : null}
           </div>
@@ -362,6 +415,14 @@ export default function MatchClient({ matchId }: { matchId: string }) {
           {/* ── Left: Problem + Answer ── */}
           <div className="flex-1 flex flex-col gap-4 min-w-0">
 
+            {/* Player-left notice */}
+            {leftPlayers.length > 0 && (
+              <div className="rounded-xl px-5 py-3 flex items-center gap-3 bg-amber-500/10 border border-amber-500/20 text-amber-300 text-sm font-semibold">
+                <UserMinus size={16} className="shrink-0" />
+                {leftPlayers.map((p) => displayName(p.username, p.userId)).join(", ")} left the battle.
+              </div>
+            )}
+
             {/* Problem card */}
             <div className="relative rounded-2xl border border-white/[0.07] bg-white/[0.015] flex-1 min-h-[340px] sm:min-h-[420px] lg:min-h-[460px] flex items-center justify-center p-8 sm:p-14 overflow-hidden">
 
@@ -382,12 +443,26 @@ export default function MatchClient({ matchId }: { matchId: string }) {
               {/* Finished overlay */}
               {finished && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#080c14]/96 backdrop-blur-sm z-10 rounded-2xl gap-3">
-                  <Trophy size={52} className="text-amber-400" />
-                  <h2 className="text-3xl font-black">Match Over</h2>
+                  <Trophy size={52} className={isDraw ? "text-zinc-500" : "text-amber-400"} />
+                  <h2 className="text-3xl font-black">{isDraw ? "Draw" : "Match Over"}</h2>
                   {winner && (
                     <p className="text-lg text-zinc-400">
                       Winner: <span className="text-white font-black">{winner}</span>
                     </p>
+                  )}
+                  {isDraw && (
+                    <p className="text-zinc-500 text-sm">Both players scored equally</p>
+                  )}
+                  {/* Final scores */}
+                  {sortedPlayers.length > 0 && (
+                    <div className="flex gap-6 mt-1">
+                      {sortedPlayers.map((p) => (
+                        <div key={p.userId} className="text-center">
+                          <div className="text-3xl font-black text-white">{p.score}</div>
+                          <div className="text-xs text-zinc-600 mt-0.5">{displayName(p.username, p.userId)}</div>
+                        </div>
+                      ))}
+                    </div>
                   )}
                   <button
                     onClick={() => (window.location.href = "/battle")}
@@ -502,6 +577,7 @@ export default function MatchClient({ matchId }: { matchId: string }) {
                   const avatarColor = getAvatarColor(p.username ?? String(p.userId));
                   const isWinner = finished && p.userId === state?.match?.winnerUserId;
                   const isLeading = !finished && i === 0 && p.score > 0;
+                  const hasLeft = !finished && p.isInRoom === false;
 
                   return (
                     <div
@@ -509,9 +585,11 @@ export default function MatchClient({ matchId }: { matchId: string }) {
                       className={`rounded-xl p-4 border transition-all ${
                         isWinner
                           ? "bg-amber-500/10 border-amber-500/25 shadow-[0_0_12px_rgba(245,158,11,0.1)]"
-                          : isLeading
-                            ? "bg-indigo-500/10 border-indigo-500/20"
-                            : "bg-white/[0.03] border-white/[0.05]"
+                          : hasLeft
+                            ? "bg-white/[0.02] border-white/[0.04] opacity-60"
+                            : isLeading
+                              ? "bg-indigo-500/10 border-indigo-500/20"
+                              : "bg-white/[0.03] border-white/[0.05]"
                       }`}
                     >
                       <div className="flex items-center gap-3">
@@ -520,18 +598,15 @@ export default function MatchClient({ matchId }: { matchId: string }) {
                           <div className={`w-10 h-10 rounded-full ${avatarColor} flex items-center justify-center text-sm font-black text-white`}>
                             {initial}
                           </div>
-                          {isWinner && (
-                            <span className="absolute -top-2 -right-2 text-base leading-none">👑</span>
-                          )}
                         </div>
 
                         {/* Name + rank + Elo */}
                         <div className="flex-1 min-w-0">
                           <div className="text-sm font-bold text-zinc-100 truncate">{label}</div>
                           <div className={`text-[11px] font-bold ${
-                            isWinner ? "text-amber-500" : isLeading ? "text-indigo-400" : "text-zinc-600"
+                            isWinner ? "text-amber-500" : hasLeft ? "text-zinc-600" : isLeading ? "text-indigo-400" : "text-zinc-600"
                           }`}>
-                            {isWinner ? "Winner!" : isLeading ? "Leading" : `#${i + 1}`}
+                            {isWinner ? "Winner!" : hasLeft ? "Left" : isLeading ? "Leading" : `#${i + 1}`}
                           </div>
                           {p.eloRating != null && (
                             <div className="text-[10px] text-zinc-600 font-mono mt-0.5">
@@ -542,7 +617,7 @@ export default function MatchClient({ matchId }: { matchId: string }) {
 
                         {/* Score — large and prominent */}
                         <div className={`text-4xl font-black tabular-nums shrink-0 leading-none ${
-                          isWinner ? "text-amber-400" : isLeading ? "text-indigo-300" : "text-zinc-400"
+                          isWinner ? "text-amber-400" : hasLeft ? "text-zinc-700" : isLeading ? "text-indigo-300" : "text-zinc-400"
                         }`}>
                           {p.score}
                         </div>
@@ -552,7 +627,7 @@ export default function MatchClient({ matchId }: { matchId: string }) {
                       <div className="mt-3 h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
                         <div
                           className={`h-full rounded-full transition-all duration-700 ease-out ${
-                            isWinner ? "bg-amber-400" : isLeading ? "bg-indigo-500" : "bg-zinc-600"
+                            isWinner ? "bg-amber-400" : hasLeft ? "bg-zinc-700" : isLeading ? "bg-indigo-500" : "bg-zinc-600"
                           }`}
                           style={{ width: `${Math.min(1, p.score / 3) * 100}%` }}
                         />
@@ -565,7 +640,7 @@ export default function MatchClient({ matchId }: { matchId: string }) {
               {/* Round counter */}
               {!finished && state?.currentProblem && (
                 <div className="mt-4 pt-4 border-t border-white/[0.05] text-center">
-                  <span className="text-xs text-zinc-700">Round {roundIndex}</span>
+                  <span className="text-xs text-zinc-700">Round {roundIndex} of 10</span>
                 </div>
               )}
             </div>

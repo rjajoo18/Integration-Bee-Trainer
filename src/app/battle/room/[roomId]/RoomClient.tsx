@@ -115,9 +115,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
     if (status === 'loading') return;
 
     if (status !== 'authenticated') {
-      setErr('You must be signed in to join a room.');
-      setState(null);
-      setLoading(false);
+      router.push('/auth');
       return;
     }
 
@@ -582,9 +580,9 @@ export default function RoomClient({ roomId }: { roomId: string }) {
                 {isHost && !canStart && (
                   <p className="text-xs text-zinc-700 text-center">
                     {players.length < 2
-                      ? '⚡ Need at least 2 players to start'
+                      ? 'Need at least 2 players to start'
                       : !allReady
-                        ? '⏳ Waiting for all players to be ready'
+                        ? 'Waiting for all players to be ready'
                         : ''}
                   </p>
                 )}
