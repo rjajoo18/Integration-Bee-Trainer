@@ -11,12 +11,13 @@ const pool = new Pool({
 
 export async function GET(
   _req: Request,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   const session = await getServerSession(authOptions);
   const viewerId = session?.user ? (session.user as any).id : null;
 
-  const userId = Number(params.id);
+  const { id } = await params;
+  const userId = Number(id);
   if (!Number.isFinite(userId)) {
     return NextResponse.json({ error: "Invalid user id" }, { status: 400 });
   }
