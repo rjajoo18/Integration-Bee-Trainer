@@ -23,6 +23,7 @@ type RoomState = {
     username: string | null;
     isReady: boolean;
     joinedAt: string | null;
+    eloRating: number | null;
   }>;
   isPlayer?: boolean;
   isHost?: boolean;
@@ -44,6 +45,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [roomClosed, setRoomClosed] = useState(false);
+  const [closedReason, setClosedReason] = useState<'host_left' | 'timeout' | 'unknown'>('unknown');
 
   const [starting, setStarting] = useState(false);
   const [toggling, setToggling] = useState(false);
@@ -66,6 +68,9 @@ export default function RoomClient({ roomId }: { roomId: string }) {
     const r = await fetch(`/api/battle/rooms/${roomId}`, { cache: 'no-store' });
 
     if (r.status === 404) {
+      const j = await r.json().catch(() => ({}));
+      const reason = (j as any)?.reason ?? 'unknown';
+      setClosedReason(reason);
       setRoomClosed(true);
       setState(null);
       return;
@@ -73,7 +78,8 @@ export default function RoomClient({ roomId }: { roomId: string }) {
 
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error((j as any)?.error ?? 'Failed to load room');
-    setState(j as RoomState);
+    const next = j as RoomState;
+    setState(next);
   }
 
   async function attemptJoin(password: string | null) {
@@ -131,10 +137,23 @@ export default function RoomClient({ roomId }: { roomId: string }) {
       alive = false;
       if (interval) clearInterval(interval);
       if (!navigatingToMatchRef.current) {
-        fetch(`/api/battle/rooms/${roomId}/leave`, { method: 'POST' }).catch(() => {});
+        // sendBeacon is more reliable on tab close/navigate-away than fetch
+        const leaveUrl = `/api/battle/rooms/${roomId}/leave`;
+        if (typeof navigator !== 'undefined' && navigator.sendBeacon) {
+          navigator.sendBeacon(leaveUrl);
+        } else {
+          fetch(leaveUrl, { method: 'POST' }).catch(() => {});
+        }
       }
     };
   }, [roomId, status]);
+
+  // Safety net: if backend confirms we're not in the room, return to lobby
+  useEffect(() => {
+    if (!loading && state !== null && state.isPlayer === false) {
+      router.replace('/battle');
+    }
+  }, [state?.isPlayer, loading, router]);
 
   useEffect(() => {
     if (state?.room && !hasInitializedEditForm.current) {
@@ -257,12 +276,16 @@ export default function RoomClient({ roomId }: { roomId: string }) {
 
   // ─── Room closed ───────────────────────────────────────────────────
   if (roomClosed) {
+    const closedMessage =
+      closedReason === 'host_left' ? 'The host left the room. It has been closed.' :
+      closedReason === 'timeout'   ? 'No activity detected in room. The room has been closed.' :
+                                     'This room is no longer available.';
     return (
       <div className="min-h-[calc(100vh-4rem)] bg-[#080c14] text-white flex items-center justify-center px-4">
         <div className="text-center max-w-sm">
           <AlertTriangle size={28} className="text-zinc-600 mx-auto mb-4" />
           <h2 className="text-lg font-semibold mb-2">Room Closed</h2>
-          <p className="text-sm text-zinc-500 mb-6">The host left the room. It has been closed.</p>
+          <p className="text-sm text-zinc-500 mb-6">{closedMessage}</p>
           <button
             onClick={() => (window.location.href = '/battle')}
             className="bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-2.5 rounded-lg text-sm font-semibold transition-colors"
@@ -568,6 +591,9 @@ export default function RoomClient({ roomId }: { roomId: string }) {
                           </span>
                         )}
                       </div>
+                      {p.eloRating != null && (
+                        <div className="text-[10px] font-mono text-indigo-400 mt-0.5">{p.eloRating}</div>
+                      )}
                     </div>
 
                     <div className="shrink-0">

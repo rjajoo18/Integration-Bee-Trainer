@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { pool } from "@/lib/db";
 import { requireUserId } from "@/lib/auth";
 import { hashPassword } from "@/lib/battle/password";
+import { deleteRoom, isRoomExpired } from "@/lib/battle/room-cleanup";
 
 export const runtime = "nodejs";
 
@@ -47,7 +48,8 @@ export async function GET(_: Request, ctx: { params: Promise<{ roomId: string }>
         brp.user_id,
         brp.is_ready,
         brp.joined_at,
-        COALESCE(u.username, split_part(u.email, '@', 1)) AS username
+        COALESCE(u.username, split_part(u.email, '@', 1)) AS username,
+        u.elo_rating
       FROM battle_room_players brp
       LEFT JOIN users u ON u.id = brp.user_id
       WHERE brp.room_id = $1
@@ -55,6 +57,31 @@ export async function GET(_: Request, ctx: { params: Promise<{ roomId: string }>
       `,
       [roomId]
     );
+
+    // Lifecycle checks — only apply to pre-game lobby rooms, never interrupt active matches
+    if (room.status === 'lobby') {
+      const hostInRoom = playersRes.rows.some(
+        (p: any) => Number(p.user_id) === Number(room.host_user_id)
+      );
+      const expired = isRoomExpired(room.created_at);
+
+      if (!hostInRoom || expired) {
+        const reason = !hostInRoom ? 'host_left' : 'timeout';
+        // Delete the orphaned/expired room in its own transaction
+        const deleteClient = await pool.connect();
+        try {
+          await deleteClient.query("BEGIN");
+          await deleteRoom(deleteClient, roomId);
+          await deleteClient.query("COMMIT");
+        } catch (e) {
+          await deleteClient.query("ROLLBACK");
+          console.error(`[ROOM_GET] Auto-delete failed for ${roomId}:`, e);
+        } finally {
+          deleteClient.release();
+        }
+        return NextResponse.json({ error: "Room not found", reason }, { status: 404 });
+      }
+    }
 
     const isPlayer = playersRes.rows.some((p: any) => Number(p.user_id) === Number(userId));
 
@@ -76,6 +103,7 @@ export async function GET(_: Request, ctx: { params: Promise<{ roomId: string }>
         username: p.username || null,
         isReady: p.is_ready,
         joinedAt: p.joined_at?.toISOString() || null,
+        eloRating: p.elo_rating != null ? Number(p.elo_rating) : null,
       })),
       isPlayer,
       isHost: room.host_user_id === userId,

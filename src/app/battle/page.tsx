@@ -18,6 +18,7 @@ type Room = {
   hasPassword: boolean;
   status: "lobby" | "in_game" | "finished";
   hostName: string;
+  hostElo: number | null;
   createdAt: string;
 };
 
@@ -367,6 +368,9 @@ export default function BattleLobbyPage() {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 mb-1">
                       <span className="font-semibold text-zinc-200 truncate">{room.hostName}</span>
+                      {room.hostElo != null && (
+                        <span className="shrink-0 font-mono text-[11px] text-indigo-400">{room.hostElo}</span>
+                      )}
                       <span
                         className={`shrink-0 px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wide border ${
                           room.status === "lobby"

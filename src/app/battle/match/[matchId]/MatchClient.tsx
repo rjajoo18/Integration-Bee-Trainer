@@ -14,10 +14,14 @@ type MatchState = {
     status: "in_game" | "finished";
     currentPhase: "in_game" | "cooldown" | "finished";
     winnerUserId: number | null;
+    loserUserId: number | null;
     difficulty: number | null;
     secondsPerProblem: number;
     cooldownStartsAt: string | null;
     cooldownEndsAt: string | null;
+    eloApplied?: boolean;
+    eloDeltaWinner?: number | null;
+    eloDeltaLoser?: number | null;
   };
   players: {
     userId: number;
@@ -464,6 +468,26 @@ export default function MatchClient({ matchId }: { matchId: string }) {
                       ))}
                     </div>
                   )}
+                  {/* Elo rating changes */}
+                  {state?.match.eloApplied && (
+                    <div className="flex gap-6">
+                      {sortedPlayers.map((p) => {
+                        const delta =
+                          p.userId === state.match.winnerUserId ? state.match.eloDeltaWinner
+                          : p.userId === state.match.loserUserId ? state.match.eloDeltaLoser
+                          : null;
+                        if (delta == null) return null;
+                        return (
+                          <div key={p.userId} className="text-center">
+                            <div className={`text-lg font-black font-mono ${delta >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                              {delta >= 0 ? "+" : ""}{delta}
+                            </div>
+                            <div className="text-[10px] text-zinc-600">Elo</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                   <button
                     onClick={() => (window.location.href = "/battle")}
                     className="mt-4 bg-indigo-600 hover:bg-indigo-500 text-white px-8 py-3 rounded-xl text-base font-bold transition-all active:scale-95 hover:shadow-[0_0_24px_rgba(99,102,241,0.4)]"
@@ -578,6 +602,12 @@ export default function MatchClient({ matchId }: { matchId: string }) {
                   const isWinner = finished && p.userId === state?.match?.winnerUserId;
                   const isLeading = !finished && i === 0 && p.score > 0;
                   const hasLeft = !finished && p.isInRoom === false;
+                  // Elo delta for this player (only after Elo is confirmed applied)
+                  const eloChange = finished && state?.match.eloApplied
+                    ? p.userId === state.match.winnerUserId ? state.match.eloDeltaWinner
+                      : p.userId === state.match.loserUserId ? state.match.eloDeltaLoser
+                      : null
+                    : null;
 
                   return (
                     <div
@@ -609,8 +639,13 @@ export default function MatchClient({ matchId }: { matchId: string }) {
                             {isWinner ? "Winner!" : hasLeft ? "Left" : isLeading ? "Leading" : `#${i + 1}`}
                           </div>
                           {p.eloRating != null && (
-                            <div className="text-[10px] text-zinc-600 font-mono mt-0.5">
-                              {p.eloRating} Elo
+                            <div className="text-[10px] font-mono mt-0.5 flex items-center gap-1">
+                              <span className="text-zinc-600">{p.eloRating} Elo</span>
+                              {eloChange != null && (
+                                <span className={eloChange >= 0 ? "text-emerald-400" : "text-red-400"}>
+                                  {eloChange >= 0 ? "+" : ""}{eloChange}
+                                </span>
+                              )}
                             </div>
                           )}
                         </div>

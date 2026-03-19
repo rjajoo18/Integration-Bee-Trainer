@@ -7,22 +7,24 @@ type Profile = {
   id: number;
   name: string | null;
   email: string | null;
-  bio: string | null;
-  is_public: boolean;
   image: string | null;
   username: string | null;
+  elo_rating: number | null;
+  rated_battles: number | null;
+  rated_wins: number | null;
+  rated_losses: number | null;
 };
 
 export default function ProfilePage() {
   const { data: session, status, update } = useSession();
-  
+
   const [profile, setProfile] = useState<Profile | null>(null);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<string>("");
 
   useEffect(() => {
     if (status !== "authenticated") return;
-    
+
     // Fetch profile data
     fetch("/api/profile")
       .then((r) => {
@@ -52,8 +54,6 @@ export default function ProfilePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: p.name,
-          bio: p.bio,
-          isPublic: p.is_public,
           image: p.image,
           username: p.username || undefined,
         }),
@@ -68,7 +68,7 @@ export default function ProfilePage() {
       }
 
       setProfile(data);
-      
+
       // Update session so Navbar reflects changes immediately
       await update({
         ...session,
@@ -88,8 +88,6 @@ export default function ProfilePage() {
     }
   }
 
-  // --- NEW: Image Compressor ---
-  // This takes the file, draws it to a small canvas (128x128), and returns a tiny Data URL
   const resizeImage = (file: File): Promise<string> => {
     return new Promise((resolve) => {
       const reader = new FileReader();
@@ -99,13 +97,12 @@ export default function ProfilePage() {
         img.src = event.target?.result as string;
         img.onload = () => {
           const canvas = document.createElement("canvas");
-          const MAX_WIDTH = 128; // Small size for avatars
+          const MAX_WIDTH = 128;
           const MAX_HEIGHT = 128;
-          
+
           let width = img.width;
           let height = img.height;
 
-          // Maintain aspect ratio
           if (width > height) {
             if (width > MAX_WIDTH) {
               height *= MAX_WIDTH / width;
@@ -122,8 +119,7 @@ export default function ProfilePage() {
           canvas.height = height;
           const ctx = canvas.getContext("2d");
           ctx?.drawImage(img, 0, 0, width, height);
-          
-          // Convert to JPEG with 0.8 quality (very small size)
+
           resolve(canvas.toDataURL("image/jpeg", 0.8));
         };
       };
@@ -134,7 +130,6 @@ export default function ProfilePage() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Use the compressor
     try {
       const smallImage = await resizeImage(file);
       setProfile((prev) => (prev ? { ...prev, image: smallImage } : prev));
@@ -148,12 +143,17 @@ export default function ProfilePage() {
       ? "border-green-500/50 bg-green-500/10 text-green-400"
       : "border-red-500/50 bg-red-500/10 text-red-400";
 
+  const elo = p.elo_rating ?? 1200;
+  const battles = p.rated_battles ?? 0;
+  const wins = p.rated_wins ?? 0;
+  const losses = p.rated_losses ?? 0;
+
   return (
     <div className="min-h-screen bg-[#0d1117] text-white pt-24 pb-16 relative overflow-hidden">
       {/* Background Glows */}
       <div className="absolute top-[-10%] right-[-10%] w-[40%] h-[40%] bg-blue-600/10 rounded-full blur-[120px]" />
       <div className="absolute bottom-[-10%] left-[-10%] w-[40%] h-[40%] bg-indigo-600/10 rounded-full blur-[120px]" />
-      
+
       <div className="mx-auto max-w-2xl px-6 relative z-10">
         {/* Header */}
         <div className="mb-10 text-center">
@@ -168,13 +168,34 @@ export default function ProfilePage() {
           {p.username && (
             <div className="text-indigo-400 font-mono text-sm mb-1">@{p.username}</div>
           )}
-          <div className="text-gray-400 font-mono text-sm">{p.email}</div>
+          <div className="text-gray-400 font-mono text-sm mb-5">{p.email}</div>
+
+          {/* Elo stat block */}
+          <div className="inline-flex items-center gap-6 rounded-xl border border-white/[0.08] bg-white/[0.03] px-6 py-3">
+            <div className="text-center">
+              <div className="text-2xl font-black font-mono text-indigo-300">{elo}</div>
+              <div className="text-[10px] font-semibold uppercase tracking-widest text-zinc-500 mt-0.5">Elo Rating</div>
+            </div>
+            <div className="w-px h-8 bg-white/[0.08]" />
+            <div className="text-center">
+              <div className="text-lg font-bold text-zinc-200">{battles}</div>
+              <div className="text-[10px] font-semibold uppercase tracking-widest text-zinc-500 mt-0.5">Battles</div>
+            </div>
+            <div className="text-center">
+              <div className="text-lg font-bold text-emerald-400">{wins}</div>
+              <div className="text-[10px] font-semibold uppercase tracking-widest text-zinc-500 mt-0.5">Wins</div>
+            </div>
+            <div className="text-center">
+              <div className="text-lg font-bold text-red-400">{losses}</div>
+              <div className="text-[10px] font-semibold uppercase tracking-widest text-zinc-500 mt-0.5">Losses</div>
+            </div>
+          </div>
         </div>
 
         {/* Card */}
         <div className="rounded-3xl border border-gray-800 bg-[#161b22] shadow-2xl overflow-hidden relative group">
           <div className="absolute -top-24 -left-24 w-48 h-48 bg-blue-600/10 rounded-full blur-3xl group-hover:bg-blue-600/20 transition-all duration-500"></div>
-          
+
           <div className="p-8 relative z-10 space-y-6">
             {/* Picture Upload */}
             <div>
@@ -247,43 +268,6 @@ export default function ProfilePage() {
                   Set a username to be identified in battles
                 </p>
               )}
-            </div>
-
-            {/* Bio */}
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-3">Bio</label>
-              <textarea
-                className="w-full min-h-32 rounded-xl border border-gray-700 bg-[#0d1117] px-4 py-3
-                  text-white placeholder:text-gray-600
-                  focus:border-blue-500/60 focus:ring-2 focus:ring-blue-500/20
-                  outline-none transition resize-y"
-                placeholder="Tell us about yourself"
-                value={p.bio ?? ""}
-                onChange={(e) =>
-                  setProfile((prev) => (prev ? { ...prev, bio: e.target.value } : prev))
-                }
-              />
-            </div>
-
-            {/* Public toggle */}
-            <div className="flex items-center justify-between rounded-xl border border-gray-700 bg-[#0d1117] px-5 py-4">
-              <span className="text-sm font-medium text-gray-200">Public Profile</span>
-              <button
-                type="button"
-                onClick={() =>
-                  setProfile((prev) => (prev ? { ...prev, is_public: !prev.is_public } : prev))
-                }
-                className={`relative inline-flex h-7 w-12 items-center rounded-full transition shadow-inner ${
-                  p.is_public ? "bg-blue-600" : "bg-gray-700"
-                }`}
-                aria-pressed={p.is_public}
-              >
-                <span
-                  className={`inline-block h-5 w-5 transform rounded-full bg-white transition shadow-md ${
-                    p.is_public ? "translate-x-6" : "translate-x-1"
-                  }`}
-                />
-              </button>
             </div>
 
             {/* Save */}

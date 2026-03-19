@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { pool } from "@/lib/db";
 import { requireUserId } from "@/lib/auth";
 import { answersEquivalent } from "@/lib/battle/answer";
-import { computeEloDeltas } from "@/lib/battle/elo";
+import { applyEloForWin } from "@/lib/battle/elo-apply";
 
 export const runtime = "nodejs";
 
@@ -221,6 +221,10 @@ export async function POST(req: Request, ctx: { params: Promise<{ matchId: strin
              WHERE id=$1`,
             [matchId, winnerId]
           );
+          // Apply Elo if there is a clear winner (skip draws)
+          if (winnerId !== null) {
+            await applyEloForWin(client, matchId, Number(winnerId), m.seconds_per_problem);
+          }
           await client.query(`UPDATE battle_rooms SET status='finished' WHERE id=$1`, [m.room_id]);
           await client.query("COMMIT");
           return NextResponse.json({
@@ -308,86 +312,19 @@ export async function POST(req: Request, ctx: { params: Promise<{ matchId: strin
 
     // Win condition: first to 3
     if (newScore >= 3) {
-      // ── Elo update (2-player matches only) ────────────────────────────────
-      // Fetch both players' current ratings in one query.
-      // The match is already locked FOR UPDATE at the top of this transaction,
-      // so no concurrent submit can reach this branch simultaneously.
-      const allPlayersElo = await client.query(
-        `SELECT bmp.user_id, u.elo_rating, u.rated_battles
-         FROM battle_match_players bmp
-         JOIN users u ON u.id = bmp.user_id
-         WHERE bmp.match_id = $1`,
-        [matchId],
-      );
-
-      let eloApplied = false;
-      let loserId: number | null = null;
-      let deltaWinner: number | null = null;
-      let deltaLoser: number | null = null;
-
-      // Only apply Elo for exactly 2-player matches
-      if (allPlayersElo.rows.length === 2) {
-        const winnerRow = allPlayersElo.rows.find(
-          (r: any) => Number(r.user_id) === userId,
-        );
-        const loserRow = allPlayersElo.rows.find(
-          (r: any) => Number(r.user_id) !== userId,
-        );
-
-        if (winnerRow && loserRow) {
-          const deltas = computeEloDeltas(
-            Number(winnerRow.elo_rating),
-            Number(loserRow.elo_rating),
-            Number(winnerRow.rated_battles),
-            Number(loserRow.rated_battles),
-          );
-          deltaWinner = deltas.deltaWinner;
-          deltaLoser = deltas.deltaLoser;
-          loserId = Number(loserRow.user_id);
-
-          await client.query(
-            `UPDATE users
-             SET elo_rating     = elo_rating + $2,
-                 rated_wins     = rated_wins + 1,
-                 rated_battles  = rated_battles + 1
-             WHERE id = $1`,
-            [userId, deltaWinner],
-          );
-
-          await client.query(
-            `UPDATE users
-             SET elo_rating     = GREATEST(100, elo_rating + $2),
-                 rated_losses   = rated_losses + 1,
-                 rated_battles  = rated_battles + 1
-             WHERE id = $1`,
-            [loserId, deltaLoser],
-          );
-
-          eloApplied = true;
-        }
-      }
-
+      // Mark match finished — match is already locked FOR UPDATE at the top of this
+      // transaction, so no concurrent submit can reach this branch simultaneously.
       await client.query(
         `UPDATE battle_matches
-         SET status              = 'finished',
-             winner_user_id      = $2,
-             ended_at            = now(),
-             elo_applied         = $3,
-             loser_user_id       = $4,
-             elo_delta_winner    = $5,
-             elo_delta_loser     = $6,
-             rated_completed_at  = $7
+         SET status         = 'finished',
+             winner_user_id = $2,
+             ended_at       = now()
          WHERE id = $1`,
-        [
-          matchId,
-          userId,
-          eloApplied,
-          loserId,
-          deltaWinner,
-          deltaLoser,
-          eloApplied ? new Date() : null,
-        ],
+        [matchId, userId],
       );
+
+      // Apply performance-aware Elo (2-player matches only; updates users + match record)
+      await applyEloForWin(client, matchId, userId, m.seconds_per_problem);
 
       await client.query(`UPDATE battle_rooms SET status='finished' WHERE id=$1`, [m.room_id]);
       await client.query("COMMIT");
@@ -418,6 +355,10 @@ export async function POST(req: Request, ctx: { params: Promise<{ matchId: strin
          WHERE id=$1`,
         [matchId, winnerId]
       );
+      // Apply Elo if there is a clear winner (skip draws)
+      if (winnerId !== null) {
+        await applyEloForWin(client, matchId, Number(winnerId), m.seconds_per_problem);
+      }
       await client.query(`UPDATE battle_rooms SET status='finished' WHERE id=$1`, [m.room_id]);
       await client.query("COMMIT");
       return NextResponse.json({

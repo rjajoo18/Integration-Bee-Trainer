@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { pool } from "@/lib/db";
 import { requireUserId } from "@/lib/auth";
+import { applyEloForWin } from "@/lib/battle/elo-apply";
 
 export const runtime = "nodejs";
 
@@ -26,9 +27,18 @@ export async function GET(_: Request, ctx: { params: Promise<{ matchId: string }
     try {
       await advanceStateIfNeeded(client, matchId);
 
+      // Fallback: apply Elo for matches that ended via timer-expiry (non-fatal)
+      try {
+        await maybeApplyEloFallback(client, matchId);
+      } catch (eloErr) {
+        console.error("[MATCH_GET] Elo fallback error (non-fatal):", eloErr);
+      }
+
       const matchRes = await client.query(
-        `SELECT m.id, m.room_id, m.status, m.winner_user_id, m.created_at, m.ended_at,
+        `SELECT m.id, m.room_id, m.status, m.winner_user_id, m.loser_user_id,
+                m.created_at, m.ended_at,
                 m.current_phase, m.cooldown_starts_at, m.cooldown_ends_at,
+                m.elo_applied, m.elo_delta_winner, m.elo_delta_loser,
                 r.difficulty, r.seconds_per_problem
          FROM battle_matches m
          JOIN battle_rooms r ON r.id = m.room_id
@@ -119,12 +129,16 @@ export async function GET(_: Request, ctx: { params: Promise<{ matchId: string }
           status: match.status,
           currentPhase: match.current_phase,
           winnerUserId: match.winner_user_id,
+          loserUserId: match.loser_user_id != null ? Number(match.loser_user_id) : null,
           createdAt: toIsoString(match.created_at),
           endedAt: toIsoString(match.ended_at),
           difficulty: match.difficulty,
           secondsPerProblem: match.seconds_per_problem,
           cooldownStartsAt: toIsoString(match.cooldown_starts_at),
           cooldownEndsAt: toIsoString(match.cooldown_ends_at),
+          eloApplied: match.elo_applied ?? false,
+          eloDeltaWinner: match.elo_delta_winner != null ? Number(match.elo_delta_winner) : null,
+          eloDeltaLoser: match.elo_delta_loser != null ? Number(match.elo_delta_loser) : null,
         },
         players: playersRes.rows.map((p: any) => ({
           userId: p.user_id,
@@ -147,6 +161,43 @@ export async function GET(_: Request, ctx: { params: Promise<{ matchId: string }
     }
     console.error("Match state error:", e);
     return NextResponse.json({ error: e?.message ?? "Failed" }, { status: 500 });
+  }
+}
+
+/**
+ * Idempotent fallback: apply Elo for matches that ended via timer-expiry without
+ * going through the submit route (where Elo is applied inline).
+ *
+ * Uses its own BEGIN/COMMIT so it is isolated from advanceStateIfNeeded's
+ * auto-committed queries. The FOR UPDATE on battle_matches serializes concurrent
+ * GET polls — the second one will see elo_applied = true and skip.
+ */
+async function maybeApplyEloFallback(client: any, matchId: string): Promise<void> {
+  await client.query("BEGIN");
+  try {
+    const checkRes = await client.query(
+      `SELECT m.winner_user_id, r.seconds_per_problem
+       FROM battle_matches m
+       JOIN battle_rooms r ON r.id = m.room_id
+       WHERE m.id = $1
+         AND m.status = 'finished'
+         AND m.elo_applied IS NOT TRUE
+         AND m.winner_user_id IS NOT NULL
+       FOR UPDATE`,
+      [matchId],
+    );
+
+    if (checkRes.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return;
+    }
+
+    const { winner_user_id, seconds_per_problem } = checkRes.rows[0];
+    await applyEloForWin(client, matchId, Number(winner_user_id), Number(seconds_per_problem));
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
   }
 }
 

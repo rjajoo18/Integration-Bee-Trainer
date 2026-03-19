@@ -2,14 +2,31 @@ import { NextResponse } from "next/server";
 import { pool } from "@/lib/db";
 import { requireUserId } from "@/lib/auth";
 import { hashPassword } from "@/lib/battle/password";
+import { cleanupStaleRooms } from "@/lib/battle/room-cleanup";
 
 export const runtime = "nodejs";
 
 export async function GET() {
   try {
     await requireUserId();
+  } catch {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
 
-    const q = `
+  const client = await pool.connect();
+  try {
+    // Opportunistic cleanup of idle/orphaned lobby rooms — non-fatal if it errors
+    try {
+      await client.query("BEGIN");
+      await cleanupStaleRooms(client);
+      await client.query("COMMIT");
+    } catch (cleanupErr) {
+      await client.query("ROLLBACK");
+      console.error("[ROOMS_LIST] Stale room cleanup error (non-fatal):", cleanupErr);
+    }
+
+    // Only return rooms where the host is still an active member (INNER JOIN)
+    const result = await client.query(`
       SELECT
         r.id,
         r.name,
@@ -21,6 +38,7 @@ export async function GET() {
         r.created_at,
         r.host_user_id,
         COALESCE(u.username, split_part(u.email, '@', 1), 'Unknown') AS host_name,
+        u.elo_rating AS host_elo,
         COALESCE(p.cnt, 0) AS player_count
       FROM battle_rooms r
       LEFT JOIN users u ON u.id = r.host_user_id
@@ -29,12 +47,12 @@ export async function GET() {
         FROM battle_room_players
         GROUP BY room_id
       ) p ON p.room_id = r.id
+      INNER JOIN battle_room_players host_check
+        ON host_check.room_id = r.id AND host_check.user_id = r.host_user_id
       WHERE r.status = 'lobby'
       ORDER BY r.created_at DESC
       LIMIT 200
-    `;
-
-    const result = await pool.query(q);
+    `);
 
     const rooms = result.rows.map((row) => ({
       id: row.id,
@@ -47,15 +65,15 @@ export async function GET() {
       status: row.status,
       hostUserId: row.host_user_id,
       hostName: row.host_name,
+      hostElo: row.host_elo != null ? Number(row.host_elo) : null,
       createdAt: row.created_at,
     }));
 
     return NextResponse.json({ rooms });
   } catch (e: any) {
-    if (e?.message === "Unauthorized") {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
     return NextResponse.json({ error: e?.message ?? "Failed" }, { status: 500 });
+  } finally {
+    client.release();
   }
 }
 

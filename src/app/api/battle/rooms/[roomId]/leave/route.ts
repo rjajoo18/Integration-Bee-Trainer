@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { pool } from "@/lib/db";
 import { requireUserId } from "@/lib/auth";
+import { deleteRoom } from "@/lib/battle/room-cleanup";
 
 export const runtime = "nodejs";
 
@@ -24,33 +25,25 @@ export async function POST(_: Request, ctx: { params: Promise<{ roomId: string }
     );
 
     if (roomRes.rows.length === 0) {
+      // Room already gone — desired end state achieved, return success
       await client.query("ROLLBACK");
-      return NextResponse.json({ error: "Room not found" }, { status: 404 });
+      return NextResponse.json({ ok: true });
     }
 
     const room = roomRes.rows[0] as { host_user_id: number; status: string };
 
-    // Remove the player from the room first
-    await client.query(
-      `DELETE FROM battle_room_players WHERE room_id=$1 AND user_id=$2`,
-      [roomId, userId]
-    );
-
     if (room.host_user_id === userId) {
-      // Host left — end any active match and delete the room entirely.
-      // Other players will receive a 404 on their next poll and be redirected.
-      await client.query(
-        `UPDATE battle_matches
-         SET status='finished', ended_at=now()
-         WHERE room_id=$1 AND status='in_game'`,
-        [roomId]
-      );
-
-      await client.query(`DELETE FROM battle_rooms WHERE id=$1`, [roomId]);
+      // Host left — delete the entire room including all remaining players
+      await deleteRoom(client, roomId);
       await client.query("COMMIT");
       return NextResponse.json({ ok: true, closed: true });
     }
 
+    // Non-host player leaving — remove only them
+    await client.query(
+      `DELETE FROM battle_room_players WHERE room_id=$1 AND user_id=$2`,
+      [roomId, userId]
+    );
     await client.query("COMMIT");
     return NextResponse.json({ ok: true });
   } catch (e: any) {

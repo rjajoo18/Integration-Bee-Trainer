@@ -21,7 +21,7 @@ export async function GET() {
   try {
     // 1. Try to find the user
     let result = await pool.query(
-      `SELECT id, name, email, bio, is_public, image, username
+      `SELECT id, name, email, image, username, elo_rating, rated_battles, rated_wins, rated_losses
        FROM users
        WHERE email = $1`,
       [session.user.email]
@@ -30,16 +30,15 @@ export async function GET() {
     // 2. If user doesn't exist (e.g. Google Login), CREATE them now
     if (result.rows.length === 0) {
       console.log("User not found in DB, creating new record for:", session.user.email);
-      
+
       const insertResult = await pool.query(
-        `INSERT INTO users (email, name, image, is_public)
-         VALUES ($1, $2, $3, $4)
-         RETURNING id, name, email, bio, is_public, image, username`,
+        `INSERT INTO users (email, name, image)
+         VALUES ($1, $2, $3)
+         RETURNING id, name, email, image, username, elo_rating, rated_battles, rated_wins, rated_losses`,
         [
-          session.user.email, 
-          session.user.name || "New User", 
+          session.user.email,
+          session.user.name || "New User",
           session.user.image || null,
-          true // Default is_public to true
         ]
       );
       result = insertResult;
@@ -72,7 +71,7 @@ export async function PATCH(req: Request) {
 
   try {
     const body = await req.json();
-    const { name, bio, isPublic, image } = body;
+    const { name, image } = body;
 
     // Handle username update if provided
     let usernameToSet: string | null = null;
@@ -97,15 +96,13 @@ export async function PATCH(req: Request) {
       UPDATE users
       SET
         name     = COALESCE($1, name),
-        bio      = COALESCE($2, bio),
-        is_public = COALESCE($3, is_public),
-        image    = COALESCE($4, image),
-        username = COALESCE($5, username)
-      WHERE email = $6
-      RETURNING id, name, email, bio, is_public, image, username
+        image    = COALESCE($2, image),
+        username = COALESCE($3, username)
+      WHERE email = $4
+      RETURNING id, name, email, image, username, elo_rating, rated_battles, rated_wins, rated_losses
     `;
 
-    const values = [name, bio, isPublic, image, usernameToSet, session.user.email];
+    const values = [name, image, usernameToSet, session.user.email];
     const result = await pool.query(query, values);
 
     return NextResponse.json(sanitizeUser(result.rows[0]));
