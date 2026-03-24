@@ -14,11 +14,7 @@ export default function HomePage() {
           Master the <br /> <span className="text-blue-500 italic">Integral.</span>
         </h1>
 
-        <div className="flex justify-center mb-10 opacity-40 text-2xl">
-          <InlineMath math="\int_{0}^{\infty} \frac{\sin(x)}{x} dx = \frac{\pi}{2}" />
-        </div>
-
-        <p className="text-gray-400 text-lg md:text-xl mb-12 leading-relaxed max-w-2xl mx-auto">
+                <p className="text-gray-400 text-lg md:text-xl mb-12 leading-relaxed max-w-2xl mx-auto">
           The ultimate trainer for competitive calculus. Explore and solve hundreds of problems from the MIT Integration Bee and beyond.
         </p>
 
