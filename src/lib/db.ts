@@ -2,10 +2,11 @@ import { Pool, QueryResult, QueryResultRow } from "pg";
 
 const globalForDb = global as unknown as { pool: Pool | undefined };
 
-const databaseUrl = process.env.DATABASE_URL;
-if (!databaseUrl) {
+const envDatabaseUrl = process.env.DATABASE_URL;
+if (!envDatabaseUrl) {
   throw new Error("DATABASE_URL is not set");
 }
+const databaseUrl: string = envDatabaseUrl;
 
 function createPool(): Pool {
   return new Pool({
