@@ -15,12 +15,9 @@ export async function POST(req: Request, ctx: { params: Promise<{ roomId: string
   }
 
   const { roomId } = await ctx.params;
-
   const body = await req.json().catch(() => ({}));
   const providedPwRaw = body?.password != null ? String(body.password) : null;
   const providedPw = providedPwRaw && providedPwRaw.trim() !== "" ? providedPwRaw : null;
-
-  console.log("[JOIN] Request:", { roomId, userId, hasPassword: !!providedPw });
 
   const client = await pool.connect();
   try {
@@ -34,7 +31,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ roomId: string
     );
 
     const roomRes = await client.query(
-      `SELECT id, status, max_players, password_hash
+      `SELECT id, status, max_players, password_hash, current_match_id
        FROM battle_rooms
        WHERE id = $1
        FOR UPDATE`,
@@ -50,27 +47,63 @@ export async function POST(req: Request, ctx: { params: Promise<{ roomId: string
       status: string;
       max_players: number;
       password_hash: string | null;
+      current_match_id: string | null;
     };
 
-    if (room.status !== "lobby") {
-      await client.query("ROLLBACK");
-      return NextResponse.json({ error: "Room already started" }, { status: 400 });
-    }
-
-    // Check if already in room BEFORE password check.
-    // Players already in the room (e.g. the host) skip password + capacity checks.
-    const alreadyInRes = await client.query(
+    const activeMatchId = room.current_match_id;
+    const roomPlayerRes = await client.query(
       `SELECT 1 FROM battle_room_players WHERE room_id = $1 AND user_id = $2`,
       [roomId, userId]
     );
-    const alreadyIn = alreadyInRes.rows.length > 0;
+    const alreadyInRoom = roomPlayerRes.rows.length > 0;
 
-    if (alreadyIn) {
-      await client.query("COMMIT");
-      return NextResponse.json({ roomId, player: { id: userId } });
+    let wasMatchParticipant = false;
+    if (activeMatchId) {
+      const matchPlayerRes = await client.query(
+        `SELECT 1 FROM battle_match_players WHERE match_id = $1 AND user_id = $2`,
+        [activeMatchId, userId]
+      );
+      wasMatchParticipant = matchPlayerRes.rows.length > 0;
     }
 
-    // Password check only for new players
+    if (alreadyInRoom) {
+      await client.query("COMMIT");
+      return NextResponse.json({
+        roomId,
+        player: { id: userId },
+        currentMatchId: activeMatchId,
+        status: room.status,
+      });
+    }
+
+    if (room.status === "in_game") {
+      if (!wasMatchParticipant) {
+        await client.query("ROLLBACK");
+        return NextResponse.json({ error: "Battle already started" }, { status: 403 });
+      }
+
+      await client.query(
+        `INSERT INTO battle_room_players (room_id, user_id, is_ready)
+         VALUES ($1, $2, true)
+         ON CONFLICT (room_id, user_id)
+         DO UPDATE SET is_ready = true`,
+        [roomId, userId]
+      );
+
+      await client.query("COMMIT");
+      return NextResponse.json({
+        roomId,
+        player: { id: userId },
+        currentMatchId: activeMatchId,
+        status: room.status,
+      });
+    }
+
+    if (room.status !== "lobby") {
+      await client.query("ROLLBACK");
+      return NextResponse.json({ error: "Battle already finished" }, { status: 403 });
+    }
+
     if (room.password_hash) {
       if (!providedPw) {
         await client.query("ROLLBACK");
@@ -84,12 +117,11 @@ export async function POST(req: Request, ctx: { params: Promise<{ roomId: string
       }
     }
 
-    // Capacity check for new players
     const cntRes = await client.query(
       `SELECT COUNT(*)::int AS cnt FROM battle_room_players WHERE room_id = $1`,
       [roomId]
     );
-    const count = cntRes.rows[0].cnt as number;
+    const count = Number(cntRes.rows[0].cnt);
 
     if (count >= room.max_players) {
       await client.query("ROLLBACK");
@@ -104,7 +136,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ roomId: string
     );
 
     await client.query("COMMIT");
-    return NextResponse.json({ roomId, player: { id: userId } });
+    return NextResponse.json({ roomId, player: { id: userId }, status: room.status });
   } catch (e: any) {
     await client.query("ROLLBACK");
     console.error("[JOIN] Error:", e);

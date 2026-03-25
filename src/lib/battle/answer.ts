@@ -2,19 +2,129 @@ import nerdamer from "nerdamer";
 import "nerdamer/Algebra";
 import "nerdamer/Calculus";
 
+export const MAX_ANSWER_LENGTH = 180;
+const MAX_OPERATOR_COUNT = 40;
+const MAX_IDENTIFIER_COUNT = 24;
+const MAX_PAREN_DEPTH = 12;
+const ALLOWED_CHARS_RE = /^[0-9a-zA-Z_+\-*/^().,\s]+$/;
+
+const ALLOWED_IDENTIFIERS = new Set([
+  "x",
+  "e",
+  "pi",
+  "sqrt",
+  "abs",
+  "sin",
+  "cos",
+  "tan",
+  "sec",
+  "csc",
+  "cot",
+  "asin",
+  "acos",
+  "atan",
+  "asec",
+  "acsc",
+  "acot",
+  "sinh",
+  "cosh",
+  "tanh",
+  "sech",
+  "csch",
+  "coth",
+  "asinh",
+  "acosh",
+  "atanh",
+  "log",
+  "exp",
+]);
+
 function normalize(s: string): string {
   return s.replace(/\s+/g, "").trim();
 }
 
+function hasBalancedParentheses(input: string): boolean {
+  let depth = 0;
+  for (const ch of input) {
+    if (ch === "(") {
+      depth++;
+      if (depth > MAX_PAREN_DEPTH) return false;
+    } else if (ch === ")") {
+      depth--;
+      if (depth < 0) return false;
+    }
+  }
+  return depth === 0;
+}
+
+function hasReasonableOperatorCount(input: string): boolean {
+  const operators = input.match(/[+\-*/^]/g);
+  return (operators?.length ?? 0) <= MAX_OPERATOR_COUNT;
+}
+
+function hasOnlyAllowedIdentifiers(input: string): boolean {
+  const identifiers = input.match(/[A-Za-z_]+/g) ?? [];
+  if (identifiers.length > MAX_IDENTIFIER_COUNT) return false;
+  return identifiers.every((token) => ALLOWED_IDENTIFIERS.has(token.toLowerCase()));
+}
+
+export function validateAnswerInput(input: string): string | null {
+  const trimmed = String(input ?? "").trim();
+  if (!trimmed) return "Answer cannot be empty.";
+  if (trimmed.length > MAX_ANSWER_LENGTH) {
+    return `Answer is too long. Keep it under ${MAX_ANSWER_LENGTH} characters.`;
+  }
+  if (!ALLOWED_CHARS_RE.test(trimmed)) {
+    return "Answer contains unsupported characters.";
+  }
+
+  const lower = trimmed.toLowerCase();
+  const bannedKeywords = [
+    "int", "integrate", "defint",
+    "diff", "derivative",
+    "solve", "roots",
+    "limit", "lim",
+    "sum", "product",
+    "nerdamer",
+  ];
+  const bannedPattern = new RegExp(`\\b(${bannedKeywords.join("|")})\\b`, "i");
+  if (bannedPattern.test(lower)) {
+    return "Solver commands are not allowed in answers.";
+  }
+
+  if (!hasBalancedParentheses(trimmed)) {
+    return "Invalid syntax: check parentheses and nesting.";
+  }
+  if (!hasReasonableOperatorCount(trimmed)) {
+    return "Answer is too complex to verify safely.";
+  }
+  if (!hasOnlyAllowedIdentifiers(trimmed)) {
+    return "Answer uses unsupported variables or function names.";
+  }
+  if (/[/*^+\-,.]{3,}/.test(trimmed) || /\^\^/.test(trimmed)) {
+    return "Invalid syntax.";
+  }
+
+  try {
+    const parsed = nerdamer(normalize(trimmed)) as any;
+    const parsedText = String(parsed.toString?.() ?? "");
+    if (!parsedText) {
+      return "Invalid syntax.";
+    }
+    if (parsedText.length > MAX_ANSWER_LENGTH * 2) {
+      return "Answer is too complex to verify safely.";
+    }
+  } catch {
+    return "Invalid syntax.";
+  }
+
+  return null;
+}
+
 /**
- * Checks whether userExpr and canonicalExpr are mathematically equivalent,
- * using the same hybrid logic as the trainer's /api/verify endpoint:
- *   1. Symbolic: simplify (userExpr) - (canonicalExpr) and check for "0"
- *   2. Numerical fallback: evaluate both at 10 random points and compare
- *
- * IMPORTANT: canonicalExpr must be the `problem_answer_computed` column value
- * (clean algebraic form), NOT `problem_answer_latex` (raw LaTeX). Nerdamer
- * cannot parse LaTeX syntax such as \frac, \ln, \sqrt, etc.
+ * Checks whether userExpr and canonicalExpr are mathematically equivalent.
+ * 1. Symbolic simplification of (userExpr - canonicalExpr)
+ * 2. Numeric fallback at random sample points
  */
 export function answersEquivalent(userExpr: string, canonicalExpr: string): boolean {
   const a = normalize(userExpr);
@@ -23,20 +133,18 @@ export function answersEquivalent(userExpr: string, canonicalExpr: string): bool
   if (a === b) return true;
 
   try {
-    // 1. Symbolic check — fastest path
     const diff = (nerdamer(`(${a})-(${b})`) as any).simplify().toString();
     if (diff === "0") return true;
   } catch {
-    // Symbolic simplification failed; fall through to numerical check
+    // Fall through to numeric checks.
   }
 
-  // 2. Numerical fallback — 10 random sample points
-  const TOLERANCE = 0.001;
+  const tolerance = 0.001;
   let validPointsTested = 0;
 
   for (let i = 0; i < 10; i++) {
     let xVal = (Math.random() * 20) - 10;
-    if (Math.abs(xVal) < 0.1) xVal += 0.5; // avoid singularities near zero
+    if (Math.abs(xVal) < 0.1) xVal += 0.5;
 
     try {
       const uVal = Number((nerdamer(a) as any).evaluate({ x: xVal }).text("decimals"));
@@ -48,17 +156,15 @@ export function answersEquivalent(userExpr: string, canonicalExpr: string): bool
       const absDiff = Math.abs(uVal - eVal);
       const magnitude = Math.max(Math.abs(uVal), Math.abs(eVal));
 
-      // Hybrid error: absolute for small values, relative for large values
       if (magnitude < 1.0) {
-        if (absDiff > TOLERANCE) return false;
-      } else {
-        if (absDiff / magnitude > TOLERANCE) return false;
+        if (absDiff > tolerance) return false;
+      } else if (absDiff / magnitude > tolerance) {
+        return false;
       }
     } catch {
-      continue; // domain error at this point (e.g. sqrt of negative), skip it
+      continue;
     }
   }
 
-  // Need at least 3 valid points to trust the numerical result
   return validPointsTested >= 3;
 }

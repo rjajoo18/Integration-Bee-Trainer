@@ -1,17 +1,55 @@
-// src/lib/db.ts
-import { Pool } from "pg";
+import { Pool, QueryResult, QueryResultRow } from "pg";
 
-// This checks if we are in production to avoid creating too many connections during hot-reloads
-const globalForDb = global as unknown as { pool: Pool };
+const globalForDb = global as unknown as { pool: Pool | undefined };
 
-export const pool =
-  globalForDb.pool ||
-  new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: true, // 👈 FIXES ECONNRESET: Required for Neon
-    max: 1,    // 👈 FIXES TIMEOUTS: Limits connections for serverless
+const databaseUrl = process.env.DATABASE_URL;
+if (!databaseUrl) {
+  throw new Error("DATABASE_URL is not set");
+}
+
+function createPool(): Pool {
+  return new Pool({
+    connectionString: databaseUrl,
+    ssl: databaseUrl.includes("sslmode=") ? undefined : true,
+    max: Number(process.env.PG_POOL_MAX ?? 5),
     idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 5000,
+    connectionTimeoutMillis: 15000,
+    allowExitOnIdle: true,
+    keepAlive: true,
   });
+}
 
-if (process.env.NODE_ENV !== "production") globalForDb.pool = pool;
+export const pool = globalForDb.pool ?? createPool();
+
+if (process.env.NODE_ENV !== "production") {
+  globalForDb.pool = pool;
+}
+
+function isRetryableDbError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const message = String((error as { message?: string }).message ?? "").toLowerCase();
+  const code = String((error as { code?: string }).code ?? "");
+
+  return (
+    code === "57P01" ||
+    code === "ECONNRESET" ||
+    message.includes("connection terminated") ||
+    message.includes("connection timeout") ||
+    message.includes("terminating connection")
+  );
+}
+
+export async function queryWithRetry<T extends QueryResultRow = QueryResultRow>(
+  text: string,
+  values?: any[],
+  retries = 1,
+): Promise<QueryResult<T>> {
+  try {
+    return await pool.query<T>(text, values);
+  } catch (error) {
+    if (retries > 0 && isRetryableDbError(error)) {
+      return queryWithRetry<T>(text, values, retries - 1);
+    }
+    throw error;
+  }
+}

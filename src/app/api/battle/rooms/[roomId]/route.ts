@@ -85,6 +85,10 @@ export async function GET(_: Request, ctx: { params: Promise<{ roomId: string }>
 
     const isPlayer = playersRes.rows.some((p: any) => Number(p.user_id) === Number(userId));
 
+    if (room.status !== "lobby" && !isPlayer) {
+      return NextResponse.json({ error: "Not a room participant" }, { status: 403 });
+    }
+
     return NextResponse.json({
       room: {
         id: room.id,

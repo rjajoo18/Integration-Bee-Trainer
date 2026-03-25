@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { pool } from "@/lib/db";
 import { requireUserId } from "@/lib/auth";
 import { applyEloForWin } from "@/lib/battle/elo-apply";
+import { ROUND_COOLDOWN_SECONDS, TOTAL_MATCH_ROUNDS } from "@/lib/battle/constants";
 
 export const runtime = "nodejs";
 
@@ -18,6 +19,46 @@ function toLatexString(v: any): string | null {
   return null;
 }
 
+async function determineWinnerId(client: any, matchId: string): Promise<number | null> {
+  const scoresRes = await client.query(
+    `SELECT user_id, score
+     FROM battle_match_players
+     WHERE match_id = $1
+     ORDER BY score DESC, user_id ASC`,
+    [matchId]
+  );
+
+  if (scoresRes.rows.length === 0) return null;
+  if (scoresRes.rows.length === 1) return Number(scoresRes.rows[0].user_id);
+
+  const topScore = Number(scoresRes.rows[0].score);
+  const secondScore = Number(scoresRes.rows[1].score);
+  if (topScore === secondScore) return null;
+  return Number(scoresRes.rows[0].user_id);
+}
+
+async function finishMatchByScore(client: any, matchId: string, roomId: string, secondsPerProblem: number): Promise<void> {
+  const winnerId = await determineWinnerId(client, matchId);
+
+  await client.query(
+    `UPDATE battle_matches
+     SET status = 'finished',
+         current_phase = 'finished',
+         winner_user_id = $2,
+         ended_at = now(),
+         cooldown_starts_at = NULL,
+         cooldown_ends_at = NULL
+     WHERE id = $1`,
+    [matchId, winnerId]
+  );
+
+  if (winnerId !== null) {
+    await applyEloForWin(client, matchId, winnerId, secondsPerProblem);
+  }
+
+  await client.query(`UPDATE battle_rooms SET status = 'finished' WHERE id = $1`, [roomId]);
+}
+
 export async function GET(_: Request, ctx: { params: Promise<{ matchId: string }> }) {
   try {
     const userId = await requireUserId();
@@ -26,8 +67,6 @@ export async function GET(_: Request, ctx: { params: Promise<{ matchId: string }
     const client = await pool.connect();
     try {
       await advanceStateIfNeeded(client, matchId);
-
-      // Fallback: apply Elo for matches that ended via timer-expiry (non-fatal)
       try {
         await maybeApplyEloFallback(client, matchId);
       } catch (eloErr) {
@@ -98,11 +137,9 @@ export async function GET(_: Request, ctx: { params: Promise<{ matchId: string }
 
         if (probRes.rows.length > 0) {
           const row = probRes.rows[0];
-          const latex = toLatexString(row.problem_text);
-
           currentProblem = {
             id: String(row.id),
-            latex,
+            latex: toLatexString(row.problem_text),
             difficulty: row.difficulty,
             roundIndex: lastRound.round_index,
             startsAt: toIsoString(lastRound.starts_at),
@@ -110,11 +147,11 @@ export async function GET(_: Request, ctx: { params: Promise<{ matchId: string }
           };
         }
 
-        // Check per-player lockout: did this player already submit a wrong answer for this problem?
         if (currentProblem) {
           const lockRes = await client.query(
-            `SELECT 1 FROM battle_problem_results
-             WHERE match_id=$1 AND user_id=$2 AND problem_id=$3 AND is_correct=false
+            `SELECT 1
+             FROM battle_problem_results
+             WHERE match_id = $1 AND user_id = $2 AND problem_id = $3 AND is_correct = false
              LIMIT 1`,
             [matchId, userId, currentProblem.id]
           );
@@ -164,14 +201,6 @@ export async function GET(_: Request, ctx: { params: Promise<{ matchId: string }
   }
 }
 
-/**
- * Idempotent fallback: apply Elo for matches that ended via timer-expiry without
- * going through the submit route (where Elo is applied inline).
- *
- * Uses its own BEGIN/COMMIT so it is isolated from advanceStateIfNeeded's
- * auto-committed queries. The FOR UPDATE on battle_matches serializes concurrent
- * GET polls — the second one will see elo_applied = true and skip.
- */
 async function maybeApplyEloFallback(client: any, matchId: string): Promise<void> {
   await client.query("BEGIN");
   try {
@@ -184,7 +213,7 @@ async function maybeApplyEloFallback(client: any, matchId: string): Promise<void
          AND m.elo_applied IS NOT TRUE
          AND m.winner_user_id IS NOT NULL
        FOR UPDATE`,
-      [matchId],
+      [matchId]
     );
 
     if (checkRes.rows.length === 0) {
@@ -201,22 +230,19 @@ async function maybeApplyEloFallback(client: any, matchId: string): Promise<void
   }
 }
 
-/**
- * Opportunistically advances match state if cooldown has expired or round time ran out.
- */
 async function advanceStateIfNeeded(client: any, matchId: string): Promise<void> {
   const now = new Date();
 
   const checkRes = await client.query(
-    `SELECT id, room_id, current_phase, cooldown_ends_at
-     FROM battle_matches
-     WHERE id = $1 AND status = 'in_game'
+    `SELECT m.id, m.room_id, m.current_phase, m.cooldown_ends_at, r.seconds_per_problem, r.difficulty
+     FROM battle_matches m
+     JOIN battle_rooms r ON r.id = m.room_id
+     WHERE m.id = $1 AND m.status = 'in_game'
      FOR UPDATE SKIP LOCKED`,
     [matchId]
   );
 
   if (checkRes.rows.length === 0) return;
-
   const match = checkRes.rows[0];
 
   if (
@@ -243,110 +269,60 @@ async function advanceStateIfNeeded(client: any, matchId: string): Promise<void>
     [matchId]
   );
 
-  if (roundRes.rows.length > 0) {
-    const round = roundRes.rows[0];
-    const endsAt = new Date(round.ends_at);
+  if (roundRes.rows.length === 0) return;
 
-    if (match.current_phase === "in_game" && !round.ended_reason && endsAt <= now) {
-      const nextRoundIndex = Number(round.round_index) + 1;
+  const round = roundRes.rows[0];
+  const endsAt = new Date(round.ends_at);
+  if (!(match.current_phase === "in_game" && !round.ended_reason && endsAt <= now)) return;
 
-      // 10-problem cap: end the match after the last round expires
-      if (nextRoundIndex >= 10) {
-        await client.query(
-          `UPDATE battle_match_rounds SET ended_reason = 'time_expired'
-           WHERE match_id = $1 AND round_index = $2`,
-          [matchId, round.round_index]
-        );
+  const nextRoundIndex = Number(round.round_index) + 1;
 
-        const scoresRes = await client.query(
-          `SELECT user_id, score FROM battle_match_players WHERE match_id = $1 ORDER BY score DESC`,
-          [matchId]
-        );
+  await client.query(
+    `UPDATE battle_match_rounds
+     SET ended_reason = 'time_expired'
+     WHERE match_id = $1 AND round_index = $2`,
+    [matchId, round.round_index]
+  );
 
-        let winnerId: any = null;
-        if (scoresRes.rows.length >= 2 && Number(scoresRes.rows[0].score) > Number(scoresRes.rows[1].score)) {
-          winnerId = scoresRes.rows[0].user_id;
-        } else if (scoresRes.rows.length === 1) {
-          winnerId = scoresRes.rows[0].user_id;
-        }
+  if (nextRoundIndex >= TOTAL_MATCH_ROUNDS) {
+    await finishMatchByScore(client, matchId, match.room_id, Number(match.seconds_per_problem));
+    return;
+  }
 
-        await client.query(
-          `UPDATE battle_matches
-           SET status = 'finished', current_phase = 'finished',
-               winner_user_id = $2, ended_at = now(),
-               cooldown_starts_at = NULL, cooldown_ends_at = NULL
-           WHERE id = $1`,
-          [matchId, winnerId]
-        );
+  const cooldownStartsAt = now;
+  const cooldownEndsAt = new Date(now.getTime() + ROUND_COOLDOWN_SECONDS * 1000);
+  const nextEndsAt = new Date(cooldownEndsAt.getTime() + Number(match.seconds_per_problem) * 1000);
 
-        await client.query(
-          `UPDATE battle_rooms SET status = 'finished' WHERE id = $1`,
-          [match.room_id]
-        );
+  await client.query(
+    `UPDATE battle_matches
+     SET current_phase = 'cooldown',
+         cooldown_starts_at = $2,
+         cooldown_ends_at = $3
+     WHERE id = $1`,
+    [matchId, cooldownStartsAt.toISOString(), cooldownEndsAt.toISOString()]
+  );
 
-        return;
-      }
+  const nextProbRes = await client.query(
+    `SELECT id
+     FROM integration_problems
+     WHERE ($1::int IS NULL OR difficulty = $1)
+       AND id NOT IN (
+         SELECT problem_id
+         FROM battle_match_rounds
+         WHERE match_id = $2
+       )
+     ORDER BY random()
+     LIMIT 1`,
+    [match.difficulty, matchId]
+  );
 
-      const cooldownStartsAt = now;
-      const cooldownEndsAt = new Date(now.getTime() + 5000);
-
-      await client.query(
-        `UPDATE battle_matches
-         SET current_phase = 'cooldown',
-             cooldown_starts_at = $2,
-             cooldown_ends_at = $3
-         WHERE id = $1`,
-        [matchId, cooldownStartsAt.toISOString(), cooldownEndsAt.toISOString()]
-      );
-
-      await client.query(
-        `UPDATE battle_match_rounds
-         SET ended_reason = 'time_expired'
-         WHERE match_id = $1 AND round_index = $2`,
-        [matchId, round.round_index]
-      );
-
-      const nextStartsAt = cooldownEndsAt;
-
-      const matchData = await client.query(
-        `SELECT r.difficulty, r.seconds_per_problem
-         FROM battle_matches m
-         JOIN battle_rooms r ON r.id = m.room_id
-         WHERE m.id = $1`,
-        [matchId]
-      );
-
-      if (matchData.rows.length > 0) {
-        const { difficulty, seconds_per_problem } = matchData.rows[0];
-        const nextEndsAt = new Date(nextStartsAt.getTime() + seconds_per_problem * 1000);
-
-        const nextProbRes = await client.query(
-          `SELECT id
-           FROM integration_problems
-           WHERE ($1::int IS NULL OR difficulty = $1)
-             AND id NOT IN (
-               SELECT problem_id
-               FROM battle_match_rounds
-               WHERE match_id = $2
-             )
-           ORDER BY random()
-           LIMIT 1`,
-          [difficulty, matchId]
-        );
-
-        if (nextProbRes.rows.length > 0) {
-          const nextProblemId = String(nextProbRes.rows[0].id);
-
-          await client.query(
-            `INSERT INTO battle_match_rounds (
-               match_id, round_index, problem_id, starts_at, ends_at
-             )
-             VALUES ($1, $2, $3, $4, $5)
-             ON CONFLICT DO NOTHING`,
-            [matchId, nextRoundIndex, nextProblemId, nextStartsAt.toISOString(), nextEndsAt.toISOString()]
-          );
-        }
-      }
-    }
+  if (nextProbRes.rows.length > 0) {
+    const nextProblemId = String(nextProbRes.rows[0].id);
+    await client.query(
+      `INSERT INTO battle_match_rounds (match_id, round_index, problem_id, starts_at, ends_at)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT DO NOTHING`,
+      [matchId, nextRoundIndex, nextProblemId, cooldownEndsAt.toISOString(), nextEndsAt.toISOString()]
+    );
   }
 }

@@ -2,7 +2,9 @@ import NextAuth, { NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import GoogleProvider from "next-auth/providers/google";
 import { compare } from "bcryptjs";
-import { pool } from "@/lib/db";
+import { queryWithRetry } from "@/lib/db";
+
+export const runtime = "nodejs";
 
 export const authOptions: NextAuthOptions = {
   providers: [
@@ -25,7 +27,7 @@ export const authOptions: NextAuthOptions = {
 
         const email = credentials.email.toLowerCase().trim();
 
-        const result = await pool.query(
+        const result = await queryWithRetry(
           "SELECT id, email, name, image, password, email_verified FROM users WHERE email = $1",
           [email],
         );
@@ -66,7 +68,7 @@ export const authOptions: NextAuthOptions = {
 
       if (session?.user?.email) {
         try {
-          const result = await pool.query(
+          const result = await queryWithRetry(
             "SELECT id, name, image, username FROM users WHERE email = $1",
             [session.user.email],
           );
@@ -96,14 +98,14 @@ export const authOptions: NextAuthOptions = {
     async signIn({ user, account }) {
       if (account?.provider === "google" && user.email) {
         try {
-          const existing = await pool.query(
+          const existing = await queryWithRetry(
             "SELECT id FROM users WHERE email = $1",
             [user.email],
           );
 
           if (existing.rows.length === 0) {
             // Google verifies the email, so create fully verified
-            const newUser = await pool.query(
+            const newUser = await queryWithRetry(
               `INSERT INTO users (email, name, image, is_public, email_verified)
                VALUES ($1, $2, $3, true, NOW())
                RETURNING id`,
@@ -115,7 +117,7 @@ export const authOptions: NextAuthOptions = {
 
             // If they previously registered via email but never verified,
             // Google's sign-in also serves as proof of email ownership
-            await pool.query(
+            await queryWithRetry(
               `UPDATE users SET email_verified = NOW()
                WHERE email = $1 AND email_verified IS NULL`,
               [user.email],

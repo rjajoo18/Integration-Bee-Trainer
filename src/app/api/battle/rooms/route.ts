@@ -7,8 +7,9 @@ import { cleanupStaleRooms } from "@/lib/battle/room-cleanup";
 export const runtime = "nodejs";
 
 export async function GET() {
+  let userId: number;
   try {
-    await requireUserId();
+    userId = await requireUserId();
   } catch {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -69,7 +70,52 @@ export async function GET() {
       createdAt: row.created_at,
     }));
 
-    return NextResponse.json({ rooms });
+    const activeRes = await client.query(
+      `
+      SELECT
+        r.id,
+        r.name,
+        r.difficulty,
+        r.seconds_per_problem,
+        r.max_players,
+        (r.password_hash IS NOT NULL) AS has_password,
+        r.status,
+        r.created_at,
+        r.current_match_id,
+        COALESCE(u.username, split_part(u.email, '@', 1), 'Unknown') AS host_name,
+        u.elo_rating AS host_elo,
+        COALESCE(p.cnt, 0) AS player_count
+      FROM battle_rooms r
+      JOIN battle_match_players bmp
+        ON bmp.match_id = r.current_match_id AND bmp.user_id = $1
+      LEFT JOIN users u ON u.id = r.host_user_id
+      LEFT JOIN (
+        SELECT room_id, COUNT(*)::int AS cnt
+        FROM battle_room_players
+        GROUP BY room_id
+      ) p ON p.room_id = r.id
+      WHERE r.status = 'in_game'
+      ORDER BY r.created_at DESC
+      `,
+      [userId]
+    );
+
+    const activeRooms = activeRes.rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      difficulty: row.difficulty,
+      secondsPerProblem: row.seconds_per_problem,
+      maxPlayers: row.max_players,
+      playerCount: row.player_count,
+      hasPassword: row.has_password,
+      status: row.status,
+      hostName: row.host_name,
+      hostElo: row.host_elo != null ? Number(row.host_elo) : null,
+      createdAt: row.created_at,
+      currentMatchId: row.current_match_id,
+    }));
+
+    return NextResponse.json({ rooms, activeRooms });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "Failed" }, { status: 500 });
   } finally {

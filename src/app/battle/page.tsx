@@ -22,6 +22,10 @@ type Room = {
   createdAt: string;
 };
 
+type ActiveRoom = Room & {
+  currentMatchId: string | null;
+};
+
 export default function BattleLobbyPage() {
   const { status } = useSession();
   const router = useRouter();
@@ -39,6 +43,7 @@ export default function BattleLobbyPage() {
   const [showCreate, setShowCreate] = useState(false);
 
   const [rooms, setRooms] = useState<Room[]>([]);
+  const [activeRooms, setActiveRooms] = useState<ActiveRoom[]>([]);
   const [loadingRooms, setLoadingRooms] = useState(true);
   const [roomsError, setRoomsError] = useState<string | null>(null);
 
@@ -59,6 +64,7 @@ export default function BattleLobbyPage() {
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error((j as any)?.error ?? "Failed to load rooms");
       setRooms((j as any).rooms ?? []);
+      setActiveRooms((j as any).activeRooms ?? []);
     } catch (e: any) {
       setRoomsError(e?.message ?? "Failed to load rooms");
     } finally {
@@ -300,6 +306,46 @@ export default function BattleLobbyPage() {
 
       {/* Room List */}
       <div className="mx-auto max-w-6xl px-6 pb-12">
+        {activeRooms.length > 0 && (
+          <div className="mb-8">
+            <div className="mb-3">
+              <span className="text-[10px] font-semibold uppercase tracking-widest text-zinc-700">
+                Active Battles
+              </span>
+            </div>
+            <div className="space-y-2">
+              {activeRooms.map((room) => (
+                <div key={`active-${room.id}`} className="rounded-xl border border-indigo-500/20 bg-indigo-500/10">
+                  <div className="flex items-center justify-between px-5 py-4 gap-4">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="font-semibold text-zinc-100 truncate">{room.hostName}</span>
+                        <span className="shrink-0 px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wide border bg-indigo-500/10 text-indigo-300 border-indigo-500/20">
+                          Rejoin
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-zinc-400">
+                        {room.difficulty === null ? "All levels" : `Level ${room.difficulty}`}
+                        <span className="mx-1.5">&middot;</span>
+                        {room.secondsPerProblem}s
+                        <span className="mx-1.5">&middot;</span>
+                        {room.playerCount}/{room.maxPlayers} players
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => { window.location.href = `/battle/room/${room.id}`; }}
+                      className="shrink-0 flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold bg-indigo-600 text-white hover:bg-indigo-500 transition-colors"
+                    >
+                      Rejoin <ChevronRight size={12} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="flex items-center gap-3 mb-5 flex-wrap">
           <div className="relative flex-1 min-w-[200px]">
             <Search size={13} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-600" />

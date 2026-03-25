@@ -6,6 +6,8 @@ import { BlockMath } from "react-katex";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Trophy, Lock, CheckCircle2, XCircle, AlertTriangle, UserMinus } from "lucide-react";
+import AnswerFormattingGuide from "@/components/AnswerFormattingGuide";
+import { TOTAL_MATCH_ROUNDS } from "@/lib/battle/constants";
 
 type MatchState = {
   match: {
@@ -115,6 +117,22 @@ export default function MatchClient({ matchId }: { matchId: string }) {
       if (!matchFinishedRef.current && !matchClosedRef.current && roomIdRef.current) {
         fetch(`/api/battle/rooms/${roomIdRef.current}/leave`, { method: "POST" }).catch(() => {});
       }
+    };
+  }, []);
+
+  useEffect(() => {
+    function leaveWithBeacon() {
+      if (matchFinishedRef.current || matchClosedRef.current || !roomIdRef.current) return;
+      if (typeof navigator !== "undefined" && navigator.sendBeacon) {
+        navigator.sendBeacon(`/api/battle/rooms/${roomIdRef.current}/leave`);
+      }
+    }
+
+    window.addEventListener("pagehide", leaveWithBeacon);
+    window.addEventListener("beforeunload", leaveWithBeacon);
+    return () => {
+      window.removeEventListener("pagehide", leaveWithBeacon);
+      window.removeEventListener("beforeunload", leaveWithBeacon);
     };
   }, []);
 
@@ -365,7 +383,7 @@ export default function MatchClient({ matchId }: { matchId: string }) {
               <span className="text-xs font-bold uppercase tracking-widest text-zinc-500">Next Problem Loading…</span>
             ) : state?.currentProblem ? (
               <span className="text-xs font-black uppercase tracking-widest text-zinc-500">
-                Problem {roundIndex} / 10
+                Problem {roundIndex} / {TOTAL_MATCH_ROUNDS}
               </span>
             ) : null}
           </div>
@@ -555,7 +573,7 @@ export default function MatchClient({ matchId }: { matchId: string }) {
                         ? "Waiting for next problem…"
                         : finished
                           ? "Match over"
-                          : "Enter your answer (e.g. pi/2 + C)"
+                          : "Enter your answer (e.g. pi/2)"
                   }
                   value={answer}
                   onChange={(e) => setAnswer(e.target.value)}
@@ -582,6 +600,8 @@ export default function MatchClient({ matchId }: { matchId: string }) {
               </div>
             </div>
 
+            <AnswerFormattingGuide compact />
+
           </div>
 
           {/* ── Right: Scoreboard ── */}
@@ -591,7 +611,7 @@ export default function MatchClient({ matchId }: { matchId: string }) {
               <div className="flex items-center gap-2 mb-5">
                 <Trophy size={15} className="text-amber-500" />
                 <h3 className="text-xs font-black uppercase tracking-widest text-zinc-500">Scoreboard</h3>
-                <span className="ml-auto text-[10px] text-zinc-700 font-bold">First to 3</span>
+                <span className="ml-auto text-[10px] text-zinc-700 font-bold">{TOTAL_MATCH_ROUNDS} rounds</span>
               </div>
 
               <div className="space-y-3">
@@ -658,13 +678,13 @@ export default function MatchClient({ matchId }: { matchId: string }) {
                         </div>
                       </div>
 
-                      {/* Progress bar to 3 */}
+                      {/* Score progress */}
                       <div className="mt-3 h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
                         <div
                           className={`h-full rounded-full transition-all duration-700 ease-out ${
                             isWinner ? "bg-amber-400" : hasLeft ? "bg-zinc-700" : isLeading ? "bg-indigo-500" : "bg-zinc-600"
                           }`}
-                          style={{ width: `${Math.min(1, p.score / 3) * 100}%` }}
+                          style={{ width: `${Math.min(1, p.score / TOTAL_MATCH_ROUNDS) * 100}%` }}
                         />
                       </div>
                     </div>
@@ -675,7 +695,7 @@ export default function MatchClient({ matchId }: { matchId: string }) {
               {/* Round counter */}
               {!finished && state?.currentProblem && (
                 <div className="mt-4 pt-4 border-t border-white/[0.05] text-center">
-                  <span className="text-xs text-zinc-700">Round {roundIndex} of 10</span>
+                  <span className="text-xs text-zinc-700">Round {roundIndex} of {TOTAL_MATCH_ROUNDS}</span>
                 </div>
               )}
             </div>

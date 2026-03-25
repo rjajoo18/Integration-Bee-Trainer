@@ -1,16 +1,14 @@
 "use client";
 
-import React, { useState, useEffect, useMemo, Suspense } from "react";
+import React, { Suspense, useEffect, useMemo, useState } from "react";
 import "katex/dist/katex.min.css";
 import { BlockMath } from "react-katex";
-import nerdamer from "nerdamer";
-import "nerdamer/Algebra";
-import "nerdamer/Calculus";
 import { useSession } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import confetti from "canvas-confetti";
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
+import AnswerFormattingGuide from "@/components/AnswerFormattingGuide";
 
 type Problem = {
   id: string;
@@ -41,14 +39,12 @@ function TrainerContent() {
   const [loading, setLoading] = useState(true);
   const [isShaking, setIsShaking] = useState(false);
 
-  // Auth redirect
   useEffect(() => {
     if (status === "unauthenticated") {
       router.push("/auth");
     }
   }, [status, router]);
 
-  // --- FETCH DATA ---
   useEffect(() => {
     let mounted = true;
 
@@ -71,12 +67,15 @@ function TrainerContent() {
         .catch(console.error);
     }
 
-    return () => { mounted = false; };
+    return () => {
+      mounted = false;
+    };
   }, [status]);
 
-  const activeProblem = useMemo(() =>
-    problems.find((p) => p.id === activeId),
-  [problems, activeId]);
+  const activeProblem = useMemo(
+    () => problems.find((p) => p.id === activeId),
+    [problems, activeId]
+  );
 
   useEffect(() => {
     setUserInput("");
@@ -101,7 +100,6 @@ function TrainerContent() {
     });
   }, [problems, searchQuery, difficultyFilter, statusFilter, progress]);
 
-  // --- ACTIONS ---
   const triggerConfetti = () => {
     confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
   };
@@ -116,10 +114,21 @@ function TrainerContent() {
 
     let isCorrect = false;
     try {
-      const expected = activeProblem.problem_answer_computed;
-      const expr = nerdamer(`(${userInput}) - (${expected})`);
-      const diff = (expr as any).simplify().toString();
-      if (diff === "0") {
+      const r = await fetch("/api/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          problemId: activeProblem.id,
+          userInput: userInput.trim(),
+        }),
+      });
+      const j = await r.json().catch(() => ({}));
+
+      if (!r.ok) {
+        throw new Error((j as any)?.error ?? "Unable to verify answer");
+      }
+
+      if ((j as any).isCorrect) {
         setFeedback({ type: "success", msg: "Correct!" });
         isCorrect = true;
         triggerConfetti();
@@ -127,8 +136,8 @@ function TrainerContent() {
         setFeedback({ type: "error", msg: "Incorrect." });
         triggerShake();
       }
-    } catch {
-      setFeedback({ type: "error", msg: "Syntax Error" });
+    } catch (e: any) {
+      setFeedback({ type: "error", msg: e?.message ?? "Unable to verify answer" });
       triggerShake();
       return;
     }
@@ -154,7 +163,7 @@ function TrainerContent() {
   };
 
   const navigateToProblem = (id: string) => router.push(`/trainer?id=${id}`);
-  const navigateToDashboard = () => router.push(`/trainer`);
+  const navigateToDashboard = () => router.push("/trainer");
 
   if (status === "loading") {
     return (
@@ -174,7 +183,6 @@ function TrainerContent() {
     );
   }
 
-  // === VIEW 1: PROBLEM PAGE ===
   if (activeProblem) {
     const isSolved = progress[activeProblem.id]?.solved;
     const attempts = progress[activeProblem.id]?.attempts || 0;
@@ -252,6 +260,7 @@ function TrainerContent() {
                   {feedback.msg}
                 </div>
               )}
+              <AnswerFormattingGuide compact />
             </div>
           </div>
         </main>
@@ -259,15 +268,10 @@ function TrainerContent() {
     );
   }
 
-  // === VIEW 2: DASHBOARD ===
   return (
     <div className="min-h-screen bg-[#080c14] text-zinc-300 pt-16">
-
-      {/* Sticky header */}
       <div className="sticky top-16 z-40 bg-[#080c14]/95 backdrop-blur-md border-b border-white/[0.05]">
         <div className="max-w-7xl mx-auto px-6 py-4 space-y-3">
-
-          {/* Row 1: Search + formatting link */}
           <div className="flex gap-3">
             <input
               type="text"
@@ -284,10 +288,7 @@ function TrainerContent() {
             </Link>
           </div>
 
-          {/* Row 2: Filters */}
           <div className="flex flex-col md:flex-row gap-3 items-start md:items-center">
-
-            {/* Status filter */}
             <div className="flex bg-white/[0.03] p-1 rounded-xl border border-white/[0.05]">
               {(["all", "solved", "unsolved"] as const).map((s) => (
                 <button
@@ -306,7 +307,6 @@ function TrainerContent() {
 
             <div className="hidden md:block w-px h-6 bg-white/[0.07]" />
 
-            {/* Difficulty filter */}
             <div className="flex-1 overflow-x-auto no-scrollbar w-full">
               <div className="flex gap-2">
                 {(["all", 0, 1, 2, 3, 4, 5] as const).map((d) => (
@@ -324,12 +324,14 @@ function TrainerContent() {
                 ))}
               </div>
             </div>
-
           </div>
         </div>
       </div>
 
       <main className="max-w-7xl mx-auto px-6 py-6">
+        <div className="mb-6">
+          <AnswerFormattingGuide compact />
+        </div>
         <div className="text-[10px] font-black uppercase tracking-widest text-zinc-700 mb-4">
           {filteredProblems.length} {filteredProblems.length === 1 ? "Problem" : "Problems"}
         </div>
@@ -390,11 +392,13 @@ function TrainerContent() {
 
 export default function IntegralTrainer() {
   return (
-    <Suspense fallback={
-      <div className="min-h-screen bg-[#080c14] flex items-center justify-center">
-        <div className="h-8 w-8 rounded-full border-2 border-indigo-500 border-t-transparent animate-spin" />
-      </div>
-    }>
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-[#080c14] flex items-center justify-center">
+          <div className="h-8 w-8 rounded-full border-2 border-indigo-500 border-t-transparent animate-spin" />
+        </div>
+      }
+    >
       <TrainerContent />
     </Suspense>
   );
