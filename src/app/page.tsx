@@ -14,7 +14,7 @@ export default function HomePage() {
           Master the <br /> <span className="text-blue-500 italic">Integral.</span>
         </h1>
 
-                <p className="text-gray-400 text-lg md:text-xl mb-12 leading-relaxed max-w-2xl mx-auto">
+        <p className="text-gray-400 text-lg md:text-xl mb-12 leading-relaxed max-w-2xl mx-auto">
           The ultimate trainer for competitive calculus. Explore and solve hundreds of problems from the MIT Integration Bee and beyond.
         </p>
 
@@ -27,6 +27,13 @@ export default function HomePage() {
           </Link>
         </div>
       </main>
+
+      {/* Credit Line */}
+      <footer className="absolute bottom-8 w-full text-center z-10">
+        <p className="text-gray-500 text-xs tracking-widest uppercase opacity-70">
+          Created by Aaryan Vaishya, Risheet Jajoo, and Shreyas Penugonda
+        </p>
+      </footer>
     </div>
   );
 }
