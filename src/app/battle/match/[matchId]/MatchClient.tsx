@@ -5,9 +5,10 @@ import "katex/dist/katex.min.css";
 import { BlockMath } from "react-katex";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Trophy, Lock, CheckCircle2, XCircle, AlertTriangle, UserMinus } from "lucide-react";
+import { ArrowLeft, Trophy, Lock, CheckCircle2, XCircle, AlertTriangle, UserMinus, Volume2, VolumeX, Eye } from "lucide-react";
 import AnswerFormattingGuide from "@/components/AnswerFormattingGuide";
 import { TOTAL_MATCH_ROUNDS } from "@/lib/battle/constants";
+import { playSound } from "@/lib/sounds";
 
 type MatchState = {
   match: {
@@ -25,6 +26,7 @@ type MatchState = {
     eloDeltaWinner?: number | null;
     eloDeltaLoser?: number | null;
   };
+  isSpectator?: boolean;
   players: {
     userId: number;
     score: number;
@@ -71,7 +73,8 @@ function displayName(username: string | null | undefined, userId: number): strin
 }
 
 export default function MatchClient({ matchId }: { matchId: string }) {
-  const { status: authStatus } = useSession();
+  const { data: session, status: authStatus } = useSession();
+  const myUserId = session?.user ? Number((session.user as any).id) : null;
   const router = useRouter();
 
   const [state, setState] = useState<MatchState | null>(null);
@@ -82,8 +85,13 @@ export default function MatchClient({ matchId }: { matchId: string }) {
   const [submitting, setSubmitting] = useState(false);
   const [feedback, setFeedback] = useState<{ type: "ok" | "bad"; msg: string } | null>(null);
   const [lockedOut, setLockedOut] = useState(false);
+  const [muted, setMuted] = useState(true);
 
   const [nowMs, setNowMs] = useState(() => Date.now());
+
+  const prevScoresRef = useRef<Record<number, number>>({});
+  const prevPhaseRef = useRef<string | null>(null);
+  const matchEndedSoundRef = useRef(false);
 
   // Tracks which problem ID we have already initialized state for, to detect round transitions.
   const seenProblemIdRef = useRef<string | null>(null);
@@ -138,18 +146,30 @@ export default function MatchClient({ matchId }: { matchId: string }) {
 
   async function load() {
     if (!validMatchId) return;
-    const r = await fetch(`/api/battle/matches/${matchId}`, { cache: "no-store" });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    try {
+      const r = await fetch(`/api/battle/matches/${matchId}`, {
+        cache: "no-store",
+        signal: controller.signal,
+      });
 
-    if (r.status === 404) {
-      setMatchClosed(true);
-      matchClosedRef.current = true;
-      setState(null);
-      return;
+      if (r.status === 404) {
+        setMatchClosed(true);
+        matchClosedRef.current = true;
+        setState(null);
+        return;
+      }
+
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error((j as any)?.error ?? "Failed to load match");
+      setState(j as MatchState);
+    } catch (e: any) {
+      if (e?.name === "AbortError") return;
+      throw e;
+    } finally {
+      clearTimeout(timeoutId);
     }
-
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error((j as any)?.error ?? "Failed to load match");
-    setState(j as MatchState);
   }
 
   useEffect(() => {
@@ -181,6 +201,34 @@ export default function MatchClient({ matchId }: { matchId: string }) {
     }
   }, [state?.isLockedOut]);
 
+  // Sound: opponent scored
+  useEffect(() => {
+    if (!state || !myUserId) return;
+    state.players.forEach((p) => {
+      if (p.userId !== myUserId) {
+        const prev = prevScoresRef.current[p.userId] ?? 0;
+        if (p.score > prev) playSound('opponent', muted);
+        prevScoresRef.current[p.userId] = p.score;
+      }
+    });
+  }, [state?.players]);
+
+  // Sound: new round starting (cooldown → in_game)
+  useEffect(() => {
+    if (phase === 'in_game' && prevPhaseRef.current === 'cooldown') {
+      playSound('roundStart', muted);
+    }
+    prevPhaseRef.current = phase;
+  }, [phase]);
+
+  // Sound: match ended
+  useEffect(() => {
+    if (finished && !matchEndedSoundRef.current && state && myUserId !== null) {
+      matchEndedSoundRef.current = true;
+      playSound(state.match.winnerUserId === myUserId ? 'win' : 'lose', muted);
+    }
+  }, [finished]);
+
   // Timer ticker — uses RAF for the last 10 seconds, interval otherwise.
   useEffect(() => {
     const phase = state?.match?.currentPhase;
@@ -207,6 +255,8 @@ export default function MatchClient({ matchId }: { matchId: string }) {
       return () => clearInterval(interval);
     }
   }, [state?.match?.currentPhase, state?.problemEndsAt, state?.currentProblem?.endsAt, state?.match?.cooldownEndsAt]);
+
+  const isSpectator = state?.isSpectator ?? false;
 
   const phase = state?.match?.currentPhase ?? "in_game";
 
@@ -269,6 +319,7 @@ export default function MatchClient({ matchId }: { matchId: string }) {
         if ((j as any)?.locked) {
           setLockedOut(true);
           setFeedback({ type: "bad", msg: "Already attempted — you are locked out for this round." });
+          playSound('wrong', muted);
         } else {
           throw new Error((j as any)?.error ?? "Failed to submit");
         }
@@ -281,9 +332,11 @@ export default function MatchClient({ matchId }: { matchId: string }) {
           msg: (j as any).matchEnded ? "Correct — match over!" : "Correct! Next problem in a moment...",
         });
         setAnswer("");
+        playSound('correct', muted);
       } else {
         setFeedback({ type: "bad", msg: "Incorrect — you are locked out for this round." });
         setLockedOut(true);
+        playSound('wrong', muted);
       }
       await load();
     } catch (e: any) {
@@ -372,8 +425,16 @@ export default function MatchClient({ matchId }: { matchId: string }) {
             className="flex items-center gap-1.5 text-sm text-zinc-500 hover:text-zinc-200 font-medium transition-colors shrink-0"
           >
             <ArrowLeft size={15} />
-            <span className="hidden sm:inline">Lobby</span>
+            <span className="hidden sm:inline">{isSpectator ? "Leave" : "Lobby"}</span>
           </button>
+
+          {/* Spectating badge */}
+          {isSpectator && (
+            <div className="flex items-center gap-1.5 text-xs font-bold text-purple-400 bg-purple-500/10 border border-purple-500/20 px-2.5 py-1 rounded-full shrink-0">
+              <Eye size={12} />
+              Spectating
+            </div>
+          )}
 
           {/* Center label */}
           <div className="flex-1 text-center">
@@ -387,6 +448,15 @@ export default function MatchClient({ matchId }: { matchId: string }) {
               </span>
             ) : null}
           </div>
+
+          {/* Mute toggle */}
+          <button
+            onClick={() => setMuted((m) => !m)}
+            title={muted ? "Unmute sounds" : "Mute sounds"}
+            className="shrink-0 transition-colors text-zinc-600 hover:text-zinc-400"
+          >
+            {muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
+          </button>
 
           {/* ─── BIG TIMER ─── */}
           <div className="shrink-0 text-right min-w-[80px]">
@@ -550,57 +620,67 @@ export default function MatchClient({ matchId }: { matchId: string }) {
             )}
 
             {/* Locked-out banner (shown when no other feedback message is visible) */}
-            {lockedOut && !feedback && (
+            {lockedOut && !feedback && !isSpectator && (
               <div className="rounded-xl px-5 py-4 flex items-center gap-3 bg-red-500/10 border border-red-500/20 text-red-300 text-base font-semibold">
                 <Lock size={18} className="shrink-0" />
                 Locked out for this round — wait for the next problem.
               </div>
             )}
 
-            {/* Answer input */}
-            <div className="rounded-2xl border border-white/[0.07] bg-white/[0.015] p-4">
-              <div className="flex gap-3">
-                <input
-                  className={`flex-1 border rounded-xl px-5 py-4 text-base text-white placeholder:text-zinc-600 outline-none transition-colors font-mono ${
-                    lockedOut
-                      ? "bg-white/[0.02] border-red-500/15 opacity-40 cursor-not-allowed"
-                      : "bg-white/[0.05] border-white/[0.08] focus:border-indigo-500/60"
-                  }`}
-                  placeholder={
-                    lockedOut
-                      ? "Locked out for this round"
-                      : inCooldown
-                        ? "Waiting for next problem…"
-                        : finished
-                          ? "Match over"
-                          : "Enter your answer (e.g. pi/2)"
-                  }
-                  value={answer}
-                  onChange={(e) => setAnswer(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !inputDisabled && answer.trim()) submit();
-                  }}
-                  disabled={inputDisabled}
-                  autoComplete="off"
-                  spellCheck={false}
-                />
-                <button
-                  onClick={submit}
-                  disabled={inputDisabled || !answer.trim()}
-                  className={`shrink-0 px-8 py-4 rounded-xl text-base font-black transition-all ${
-                    inputDisabled || !answer.trim()
-                      ? "bg-white/[0.04] text-zinc-700 cursor-not-allowed"
-                      : "bg-indigo-600 hover:bg-indigo-500 text-white hover:shadow-[0_0_24px_rgba(99,102,241,0.4)] active:scale-95"
-                  }`}
-                >
-                  {submitting ? (
-                    <span className="inline-block h-5 w-5 rounded-full border-2 border-white border-t-transparent animate-spin" />
-                  ) : "Submit"}
-                </button>
+            {/* Spectator notice */}
+            {isSpectator && !finished && (
+              <div className="rounded-xl px-5 py-4 flex items-center gap-3 bg-purple-500/10 border border-purple-500/20 text-purple-300 text-sm font-semibold">
+                <Eye size={16} className="shrink-0" />
+                You are spectating — submit is disabled.
               </div>
-            </div>
+            )}
 
-            <AnswerFormattingGuide compact />
+            {/* Answer input — hidden for spectators */}
+            {!isSpectator && (
+              <div className="rounded-2xl border border-white/[0.07] bg-white/[0.015] p-4">
+                <div className="flex gap-3">
+                  <input
+                    className={`flex-1 border rounded-xl px-5 py-4 text-base text-white placeholder:text-zinc-600 outline-none transition-colors font-mono ${
+                      lockedOut
+                        ? "bg-white/[0.02] border-red-500/15 opacity-40 cursor-not-allowed"
+                        : "bg-white/[0.05] border-white/[0.08] focus:border-indigo-500/60"
+                    }`}
+                    placeholder={
+                      lockedOut
+                        ? "Locked out for this round"
+                        : inCooldown
+                          ? "Waiting for next problem…"
+                          : finished
+                            ? "Match over"
+                            : "Enter your answer (e.g. pi/2)"
+                    }
+                    value={answer}
+                    onChange={(e) => setAnswer(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !inputDisabled && answer.trim()) submit();
+                    }}
+                    disabled={inputDisabled}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  <button
+                    onClick={submit}
+                    disabled={inputDisabled || !answer.trim()}
+                    className={`shrink-0 px-8 py-4 rounded-xl text-base font-black transition-all ${
+                      inputDisabled || !answer.trim()
+                        ? "bg-white/[0.04] text-zinc-700 cursor-not-allowed"
+                        : "bg-indigo-600 hover:bg-indigo-500 text-white hover:shadow-[0_0_24px_rgba(99,102,241,0.4)] active:scale-95"
+                    }`}
+                  >
+                    {submitting ? (
+                      <span className="inline-block h-5 w-5 rounded-full border-2 border-white border-t-transparent animate-spin" />
+                    ) : "Submit"}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {!isSpectator && <AnswerFormattingGuide compact />}
 
           </div>
 

@@ -5,7 +5,7 @@ import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import {
   Lock, Search, RefreshCw,
-  Plus, ChevronRight, X, Globe,
+  Plus, ChevronRight, X, Globe, Eye,
 } from "lucide-react";
 
 type Room = {
@@ -26,6 +26,16 @@ type ActiveRoom = Room & {
   currentMatchId: string | null;
 };
 
+type LiveRoom = {
+  id: string;
+  name: string;
+  matchId: string;
+  hostName: string;
+  difficulty: number | null;
+  secondsPerProblem: number;
+  playerCount: number;
+};
+
 export default function BattleLobbyPage() {
   const { status } = useSession();
   const router = useRouter();
@@ -44,6 +54,7 @@ export default function BattleLobbyPage() {
 
   const [rooms, setRooms] = useState<Room[]>([]);
   const [activeRooms, setActiveRooms] = useState<ActiveRoom[]>([]);
+  const [liveRooms, setLiveRooms] = useState<LiveRoom[]>([]);
   const [loadingRooms, setLoadingRooms] = useState(true);
   const [roomsError, setRoomsError] = useState<string | null>(null);
 
@@ -65,6 +76,7 @@ export default function BattleLobbyPage() {
       if (!r.ok) throw new Error((j as any)?.error ?? "Failed to load rooms");
       setRooms((j as any).rooms ?? []);
       setActiveRooms((j as any).activeRooms ?? []);
+      setLiveRooms((j as any).liveRooms ?? []);
     } catch (e: any) {
       setRoomsError(e?.message ?? "Failed to load rooms");
     } finally {
@@ -338,6 +350,46 @@ export default function BattleLobbyPage() {
                       className="shrink-0 flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold bg-indigo-600 text-white hover:bg-indigo-500 transition-colors"
                     >
                       Rejoin <ChevronRight size={12} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {liveRooms.length > 0 && (
+          <div className="mb-8">
+            <div className="mb-3">
+              <span className="text-[10px] font-semibold uppercase tracking-widest text-zinc-700">
+                Live Matches
+              </span>
+            </div>
+            <div className="space-y-2">
+              {liveRooms.map((room) => (
+                <div key={`live-${room.id}`} className="rounded-xl border border-purple-500/20 bg-purple-500/[0.04]">
+                  <div className="flex items-center justify-between px-5 py-4 gap-4">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="font-semibold text-zinc-100 truncate">{room.hostName}</span>
+                        <span className="shrink-0 px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wide border bg-purple-500/10 text-purple-300 border-purple-500/20">
+                          Live
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-zinc-600">
+                        {room.difficulty === null ? "All levels" : `Level ${room.difficulty}`}
+                        <span className="mx-1.5">·</span>
+                        {room.secondsPerProblem}s
+                        <span className="mx-1.5">·</span>
+                        {room.playerCount} players
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => { window.location.href = `/battle/match/${room.matchId}`; }}
+                      className="shrink-0 flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold border bg-purple-500/10 text-purple-300 border-purple-500/20 hover:bg-purple-500/20 transition-colors"
+                    >
+                      <Eye size={12} />
+                      Watch
                     </button>
                   </div>
                 </div>

@@ -3,30 +3,13 @@ import { pool } from "@/lib/db";
 import { requireUserId } from "@/lib/auth";
 import { answersEquivalent, validateAnswerInput } from "@/lib/battle/answer";
 import { applyEloForWin } from "@/lib/battle/elo-apply";
+import { determineWinnerId } from "@/lib/battle/winner";
 import { ROUND_COOLDOWN_SECONDS, TOTAL_MATCH_ROUNDS } from "@/lib/battle/constants";
 
 export const runtime = "nodejs";
 
 function isValidProblemId(id: string): boolean {
   return /^[A-Z0-9-]+$/i.test(id) && id.length < 100 && !id.includes(" ");
-}
-
-async function determineWinnerId(client: any, matchId: string): Promise<number | null> {
-  const scoresRes = await client.query(
-    `SELECT user_id, score
-     FROM battle_match_players
-     WHERE match_id = $1
-     ORDER BY score DESC, user_id ASC`,
-    [matchId]
-  );
-
-  if (scoresRes.rows.length === 0) return null;
-  if (scoresRes.rows.length === 1) return Number(scoresRes.rows[0].user_id);
-
-  const topScore = Number(scoresRes.rows[0].score);
-  const secondScore = Number(scoresRes.rows[1].score);
-  if (topScore === secondScore) return null;
-  return Number(scoresRes.rows[0].user_id);
 }
 
 async function finishMatchByScore(client: any, matchId: string, roomId: string, secondsPerProblem: number) {
@@ -353,7 +336,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ matchId: strin
         nextProblemId = String(nextProbRes.rows[0].id);
         await client.query(
           `INSERT INTO battle_match_rounds (match_id, round_index, problem_id, starts_at, ends_at)
-           VALUES ($1, $2, $3, $4, $5)`,
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (match_id, round_index) DO NOTHING`,
           [matchId, nextRoundIndex, nextProblemId, cooldownUntil.toISOString(), nextEndsAt.toISOString()]
         );
       }

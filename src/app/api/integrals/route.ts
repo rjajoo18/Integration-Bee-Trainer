@@ -1,46 +1,28 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { pool } from "@/lib/db";
 
 export const runtime = "nodejs";
 
+// Intentionally public: the trainer and battle lobby both need the problem list
+// without auth. problem_answer_computed is intentionally excluded; answer
+// checking is handled server-side by /api/verify and /api/battle/matches.
 export async function GET(req: Request) {
-  const session = await getServerSession(authOptions);
-  /*if (!session) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }*/
-
   const { searchParams } = new URL(req.url);
-  const difficultyParam = searchParams.get("difficulty"); // "all" | "0".."5" | null
+  const difficultyParam = searchParams.get("difficulty");
 
-  // Build WHERE clause safely
-  const values: any[] = [];
-  let whereClause = "";
-
+  let difficulty: number | null = null;
   if (difficultyParam && difficultyParam !== "all") {
     const d = Number(difficultyParam);
-    if (Number.isInteger(d) && d >= 0 && d <= 5) {
-      values.push(d);
-      whereClause = `WHERE difficulty = $1`;
-    }
+    if (Number.isInteger(d) && d >= 0 && d <= 5) difficulty = d;
   }
 
   try {
     const result = await pool.query(
-      `
-      SELECT 
-        id, 
-        problem_text, 
-        problem_answer_latex, 
-        problem_answer_computed, 
-        source,
-        difficulty
-      FROM integration_problems
-      ${whereClause}
-      ORDER BY id ASC
-    `,
-      values
+      `SELECT id, problem_text, problem_answer_latex, source, difficulty
+       FROM integration_problems
+       WHERE ($1::int IS NULL OR difficulty = $1)
+       ORDER BY id ASC`,
+      [difficulty],
     );
 
     return NextResponse.json(result.rows);

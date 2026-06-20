@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
-import { Play, LogOut, Check, X, Lock, AlertTriangle } from 'lucide-react';
+import { Play, LogOut, Check, X, Lock, AlertTriangle, Link2 } from 'lucide-react';
 
 type RoomState = {
   room: {
@@ -60,26 +60,39 @@ export default function RoomClient({ roomId }: { roomId: string }) {
   const [editPassword, setEditPassword] = useState('');
   const [clearPassword, setClearPassword] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const navigatingToMatchRef = useRef(false);
   const hasInitializedEditForm = useRef(false);
 
   async function load() {
-    const r = await fetch(`/api/battle/rooms/${roomId}`, { cache: 'no-store' });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    try {
+      const r = await fetch(`/api/battle/rooms/${roomId}`, {
+        cache: 'no-store',
+        signal: controller.signal,
+      });
 
-    if (r.status === 404) {
+      if (r.status === 404) {
+        const j = await r.json().catch(() => ({}));
+        const reason = (j as any)?.reason ?? 'unknown';
+        setClosedReason(reason);
+        setRoomClosed(true);
+        setState(null);
+        return;
+      }
+
       const j = await r.json().catch(() => ({}));
-      const reason = (j as any)?.reason ?? 'unknown';
-      setClosedReason(reason);
-      setRoomClosed(true);
-      setState(null);
-      return;
+      if (!r.ok) throw new Error((j as any)?.error ?? 'Failed to load room');
+      const next = j as RoomState;
+      setState(next);
+    } catch (e: any) {
+      if (e?.name === 'AbortError') return;
+      throw e;
+    } finally {
+      clearTimeout(timeoutId);
     }
-
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error((j as any)?.error ?? 'Failed to load room');
-    const next = j as RoomState;
-    setState(next);
   }
 
   async function attemptJoin(password: string | null) {
@@ -254,6 +267,12 @@ export default function RoomClient({ roomId }: { roomId: string }) {
     }
   }
 
+  async function copyLink() {
+    await navigator.clipboard.writeText(window.location.href).catch(() => {});
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
   async function leaveRoom() {
     navigatingToMatchRef.current = false;
     await fetch(`/api/battle/rooms/${roomId}/leave`, { method: 'POST' }).catch(() => {});
@@ -392,7 +411,17 @@ export default function RoomClient({ roomId }: { roomId: string }) {
             {hasPassword && <Lock size={11} className="text-zinc-600" />}
           </div>
 
-          <div className="w-14" />
+          <div className="w-14 flex justify-end">
+            {state?.room?.status === 'lobby' && (
+              <button
+                onClick={copyLink}
+                className="flex items-center gap-1.5 text-sm font-medium transition-colors text-zinc-500 hover:text-zinc-200"
+              >
+                <Link2 size={14} />
+                {copied ? 'Copied!' : 'Share'}
+              </button>
+            )}
+          </div>
         </div>
       </div>
 

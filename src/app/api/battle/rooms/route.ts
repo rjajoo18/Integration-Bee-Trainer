@@ -115,7 +115,39 @@ export async function GET() {
       currentMatchId: row.current_match_id,
     }));
 
-    return NextResponse.json({ rooms, activeRooms });
+    // In-game rooms the current user is NOT participating in (for spectating)
+    const liveRes = await client.query(
+      `SELECT
+         r.id,
+         r.name,
+         r.difficulty,
+         r.seconds_per_problem,
+         r.current_match_id AS match_id,
+         COALESCE(u.username, split_part(u.email, '@', 1), 'Unknown') AS host_name,
+         (SELECT COUNT(*)::int FROM battle_match_players WHERE match_id = r.current_match_id) AS player_count
+       FROM battle_rooms r
+       LEFT JOIN users u ON u.id = r.host_user_id
+       WHERE r.status = 'in_game'
+         AND NOT EXISTS (
+           SELECT 1 FROM battle_match_players
+           WHERE match_id = r.current_match_id AND user_id = $1
+         )
+       ORDER BY r.created_at DESC
+       LIMIT 20`,
+      [userId]
+    );
+
+    const liveRooms = liveRes.rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      matchId: row.match_id,
+      hostName: row.host_name,
+      difficulty: row.difficulty,
+      secondsPerProblem: row.seconds_per_problem,
+      playerCount: row.player_count,
+    }));
+
+    return NextResponse.json({ rooms, activeRooms, liveRooms });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "Failed" }, { status: 500 });
   } finally {

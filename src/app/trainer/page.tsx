@@ -14,7 +14,6 @@ type Problem = {
   id: string;
   problem_text: string;
   problem_answer_latex: string;
-  problem_answer_computed: string;
   source?: string | null;
   difficulty?: number | null;
 };
@@ -82,6 +81,19 @@ function TrainerContent() {
     setFeedback(null);
     setIsShaking(false);
   }, [activeId]);
+
+  const analytics = useMemo(() => {
+    if (problems.length === 0) return null;
+    const total = problems.length;
+    const solved = problems.filter((p) => progress[p.id]?.solved).length;
+    const attempted = problems.filter((p) => (progress[p.id]?.attempts ?? 0) > 0).length;
+    const byDifficulty = [1, 2, 3, 4, 5].map((d) => {
+      const dp = problems.filter((p) => p.difficulty === d);
+      const ds = dp.filter((p) => progress[p.id]?.solved).length;
+      return { level: d, total: dp.length, solved: ds };
+    });
+    return { total, solved, attempted, byDifficulty };
+  }, [problems, progress]);
 
   const filteredProblems = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -332,6 +344,40 @@ function TrainerContent() {
         <div className="mb-6">
           <AnswerFormattingGuide compact />
         </div>
+
+        {/* Analytics bar */}
+        {analytics && (
+          <div className="flex flex-wrap gap-2 mb-6">
+            {/* Overall */}
+            <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-3 flex items-center gap-3 min-w-[120px]">
+              <span className="text-2xl font-black text-white tabular-nums">{analytics.solved}</span>
+              <div>
+                <div className="text-[10px] font-black uppercase tracking-widest text-zinc-600">Solved</div>
+                <div className="text-xs text-zinc-500">of {analytics.total}</div>
+              </div>
+            </div>
+
+            {/* Per-difficulty */}
+            {analytics.byDifficulty.filter((d) => d.total > 0).map((d) => {
+              const pct = d.total > 0 ? Math.round((d.solved / d.total) * 100) : 0;
+              return (
+                <div key={d.level} className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2.5 min-w-[72px] flex flex-col gap-1.5">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="text-sm font-black text-white tabular-nums">{d.solved}/{d.total}</span>
+                    <span className="text-[9px] font-bold uppercase tracking-widest text-zinc-600">L{d.level}</span>
+                  </div>
+                  <div className="h-1 rounded-full bg-white/[0.06] overflow-hidden">
+                    <div
+                      className="h-full rounded-full bg-indigo-500 transition-all duration-500"
+                      style={{ width: `${pct}%` }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         <div className="text-[10px] font-black uppercase tracking-widest text-zinc-700 mb-4">
           {filteredProblems.length} {filteredProblems.length === 1 ? "Problem" : "Problems"}
         </div>
